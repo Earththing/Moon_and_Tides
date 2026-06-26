@@ -23,12 +23,7 @@ function makeHilo(): TideEvent[] {
 describe('TideCurveChart', () => {
   it('day view renders without error with 240 data points', () => {
     const { container } = render(
-      <TideCurveChart
-        curveData={makeCurve(240)}
-        hiloData={makeHilo()}
-        view="day"
-        stationId="9414290"
-      />
+      <TideCurveChart curveData={makeCurve(240)} hiloData={makeHilo()} view="day" stationId="9414290" />
     )
     expect(container.firstChild).toBeTruthy()
   })
@@ -44,8 +39,21 @@ describe('TideCurveChart', () => {
     const { container } = render(
       <TideCurveChart curveData={makeCurve(240)} hiloData={makeHilo()} view="day" stationId="9414290" floodMinor={4.5} />
     )
-    // Recharts labels don't render in jsdom; check the sentinel element
     expect(container.querySelector('[data-testid="flood-line-sentinel"]')).toBeTruthy()
+  })
+
+  it('now ReferenceLine sentinel absent when isToday is false', () => {
+    const { container } = render(
+      <TideCurveChart curveData={makeCurve(240)} hiloData={makeHilo()} view="day" stationId="9414290" isToday={false} />
+    )
+    expect(container.querySelector('[data-testid="now-line-sentinel"]')).toBeNull()
+  })
+
+  it('now ReferenceLine sentinel present when isToday is true', () => {
+    const { container } = render(
+      <TideCurveChart curveData={makeCurve(240)} hiloData={makeHilo()} view="day" stationId="9414290" isToday={true} />
+    )
+    expect(container.querySelector('[data-testid="now-line-sentinel"]')).toBeTruthy()
   })
 
   it('year view renders bar chart', () => {
