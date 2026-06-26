@@ -44,6 +44,17 @@ Files: `frontend/src/__tests__/Dashboard.test.tsx` (new)
 
 ## Medium priority
 
+### Cache trimming (future, not urgent)
+The SQLite cache in `cache/tides.db` grows indefinitely by design. Past-year NOAA
+predictions are kept forever (they're immutable). If the DB ever becomes large,
+add a cleanup tool to remove predictions for years more than N years in the past,
+or stations the user has never accessed. Solar data (~200 bytes/day) is tiny.
+
+Relevant tables: `predictions`, `solar_days`. Tables that should never be trimmed:
+`stations`, `tidal_ranges`, `flood_levels`, `perigean_events`.
+
+---
+
 ### Slack water in ICS is slow
 `options.slack` in `build_tidal_ics` works but iterates every day in a year and calls
 `get_water_level_curve()` for each — that's 365 API calls on cache miss.

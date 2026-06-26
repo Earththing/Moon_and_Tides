@@ -8,7 +8,8 @@ import httpx
 CACHE_DB = Path(__file__).parent.parent / "cache" / "tides.db"
 NOAA_BASE = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 APP_HEADER = "moon_and_tides/0.1"
-CACHE_DAYS_PREDICTIONS = 30
+CACHE_DAYS_PREDICTIONS_FUTURE = 365   # current/future year — check once a year
+# Past years: never expire — NOAA predictions for completed years are immutable
 
 
 def _db_conn() -> sqlite3.Connection:
@@ -87,8 +88,13 @@ def _cache_get(station_id: str, year: int, product: str, datum: str, units: str)
     if row is None:
         return None
     json_data, fetched_at_str = row
+    current_year = datetime.utcnow().year
+    if year < current_year:
+        # Past-year predictions are immutable — keep forever
+        return json.loads(json_data)
+    # Current/future year: refresh once per year
     fetched_at = datetime.fromisoformat(fetched_at_str)
-    if datetime.utcnow() - fetched_at > timedelta(days=CACHE_DAYS_PREDICTIONS):
+    if datetime.utcnow() - fetched_at > timedelta(days=CACHE_DAYS_PREDICTIONS_FUTURE):
         return None
     return json.loads(json_data)
 

@@ -10,7 +10,7 @@ from app.tide_data import _db_conn
 
 NOAA_MDAPI = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi"
 APP_HEADER = "moon_and_tides/0.1"
-STATION_CACHE_DAYS = 7
+STATION_CACHE_DAYS = 30  # NOAA station list changes infrequently
 
 
 def _get_cached_stations() -> list[dict] | None:
