@@ -48,6 +48,7 @@ export interface SpecialEvents {
   tidepooling_windows: unknown[]
   slack_water: unknown[]
   perigean_spring_tides: unknown[]
+  king_tides: unknown[]
   radius_alerts: unknown[]
   flood_risk: unknown[]
 }

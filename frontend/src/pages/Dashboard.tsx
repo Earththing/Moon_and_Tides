@@ -46,14 +46,18 @@ export default function Dashboard() {
     flood: false, perigean: true, radius: false,
   })
 
-  // Load nearby stations on location change
+  // Load nearby stations on location change — always select the nearest
   useEffect(() => {
     fetchNearestStations(lat, lon, 5).then(list => {
       setStations(list)
-      if (!selectedId && list.length > 0) {
+      // Auto-select nearest unless the URL specified a station (paramStation)
+      if (list.length > 0 && !paramStation) {
+        setSelectedId(list[0].id)
+      } else if (list.length > 0 && !selectedId) {
         setSelectedId(list[0].id)
       }
     }).catch(console.error)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lat, lon])
 
   // Load selected station detail
@@ -85,15 +89,27 @@ export default function Dashboard() {
     if (!selectedId) return
     fetchSpecialEvents(selectedId, year, lat, lon).then(ev => {
       const items: FeedItem[] = []
-      for (const e of (ev.perigean_spring_tides as Array<{ date: string; moon_phase: string; description: string }> || [])) {
+
+      type PerigeanEvent = { date: string; moon_phase: string; description: string }
+      type KingTideEvent = { date: string; time: string; time_12h: string; height_ft: number; extreme_type: string }
+      type FloodEvent = { date: string; flood_level: string; predicted_high_ft: number }
+      type TidepoolEvent = { date: string; low_tide_time_12h: string; low_height_ft: number }
+
+      for (const e of (ev.perigean_spring_tides as PerigeanEvent[] || [])) {
         items.push({ type: 'info', title: 'Perigean Spring Tide', date: e.date, description: e.description, detail: e.moon_phase })
       }
-      for (const e of (ev.flood_risk as Array<{ date: string; flood_level: string; predicted_high_ft: number }> || [])) {
-        items.push({ type: 'alert', title: `Flood Risk: ${e.flood_level}`, date: e.date, description: `Predicted high: ${e.predicted_high_ft.toFixed(1)} ft` })
+      for (const e of (ev.king_tides as KingTideEvent[] || [])) {
+        if (e.extreme_type === 'king_tide') {
+          items.push({ type: 'alert', title: 'King Tide', date: e.date, description: `${e.time_12h}`, detail: `${e.height_ft.toFixed(2)} ft` })
+        }
       }
-      for (const e of (ev.tidepooling_windows as Array<{ date: string; low_tide_time_12h: string; low_height_ft: number }> || [])) {
-        items.push({ type: 'opportunity', title: 'Tidepooling Window', date: e.date, description: `Low tide at `, detail: `${e.low_tide_time_12h} (${e.low_height_ft.toFixed(1)} ft)` })
+      for (const e of (ev.flood_risk as FloodEvent[] || [])) {
+        items.push({ type: 'alert', title: `Flood Risk: ${e.flood_level}`, date: e.date, description: `Predicted high:`, detail: `${e.predicted_high_ft.toFixed(1)} ft` })
       }
+      for (const e of (ev.tidepooling_windows as TidepoolEvent[] || [])) {
+        items.push({ type: 'opportunity', title: 'Tidepooling Window', date: e.date, description: `Low tide at`, detail: `${e.low_tide_time_12h} (${e.low_height_ft.toFixed(1)} ft)` })
+      }
+
       items.sort((a, b) => a.date.localeCompare(b.date))
       setFeedItems(items)
     }).catch(console.error)

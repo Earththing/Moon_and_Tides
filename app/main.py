@@ -162,13 +162,57 @@ def special_events(
     lon: float = Query(None),
     radius_miles: float = Query(75.0),
 ):
-    # Placeholder — implemented in Phase 4
+    from app.special_events import get_perigean_spring_tides, get_tidepooling_windows
+    from app.alert_engine import find_extreme_tides, compute_extreme_thresholds, check_flood_risk
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    year_end = f"{year}-12-31"
+
+    # Perigean spring tides for the whole year, filtered to upcoming
+    try:
+        perigean = [e for e in get_perigean_spring_tides(year) if e["date"] >= today]
+    except Exception:
+        perigean = []
+
+    # King tide alerts: rest of year using 90th-percentile threshold
+    try:
+        thresholds = compute_extreme_thresholds(station_id)
+        begin_fmt = today.replace("-", "")
+        end_fmt = year_end.replace("-", "")
+        king_tides = find_extreme_tides(
+            station_id, begin_fmt, end_fmt,
+            high_threshold_ft=thresholds["high_threshold_ft"],
+            low_threshold_ft=thresholds["low_threshold_ft"],
+        )
+    except Exception:
+        king_tides = []
+
+    # Flood risk events
+    try:
+        flood = check_flood_risk(station_id, today.replace("-", ""), year_end.replace("-", ""))
+    except Exception:
+        flood = []
+
+    # Tidepooling windows (requires lat/lon)
+    tidepooling: list = []
+    if lat is not None and lon is not None:
+        try:
+            # Look 60 days ahead
+            from datetime import timedelta
+            end_tp = (datetime.utcnow() + timedelta(days=60)).strftime("%Y%m%d")
+            tidepooling = get_tidepooling_windows(
+                station_id, today.replace("-", ""), end_tp, lat, lon
+            )[:10]
+        except Exception:
+            tidepooling = []
+
     return {
-        "tidepooling_windows": [],
+        "perigean_spring_tides": perigean,
+        "king_tides": king_tides[:30],
+        "flood_risk": flood[:20],
+        "tidepooling_windows": tidepooling,
         "slack_water": [],
-        "perigean_spring_tides": [],
         "radius_alerts": [],
-        "flood_risk": [],
     }
 
 
