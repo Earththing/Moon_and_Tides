@@ -72,10 +72,14 @@ export default function DateNav({
         </button>
       )}
 
-      {view === 'day' && (
+      {view !== 'year' && (
         <button
           onClick={onToggleDayNight}
-          title="Toggle day/night shading"
+          title={
+            view === 'day'
+              ? 'Toggle day/night shading with sunrise/sunset gradient'
+              : 'Toggle day/night shading — darker bands = night hours'
+          }
           className={`ml-auto px-3 py-1 text-xs font-medium rounded border transition-colors ${
             showDayNight
               ? 'bg-[#0a152a] text-white border-[#0a152a]'

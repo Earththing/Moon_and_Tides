@@ -65,6 +65,67 @@ def solar_day(
     }
 
 
+@app.get("/api/v1/solar-range")
+def solar_range(
+    lat: float = Query(...),
+    lon: float = Query(...),
+    begin: str = Query(...),   # YYYY-MM-DD
+    end: str   = Query(...),   # YYYY-MM-DD
+):
+    """Return sunrise/sunset for every day in [begin, end], in local timezone."""
+    import ephem
+    from timezonefinder import TimezoneFinder
+    from app.tide_data import to_12h
+    from datetime import date as dt_date
+
+    tf = TimezoneFinder()
+    tz_name = tf.timezone_at(lat=lat, lng=lon) or "UTC"
+    tz = ZoneInfo(tz_name)
+
+    begin_d = dt_date.fromisoformat(begin)
+    end_d   = dt_date.fromisoformat(end)
+    results = []
+
+    obs = ephem.Observer()
+    obs.lat = str(lat)
+    obs.lon = str(lon)
+    obs.horizon = "-0:34"
+    sun = ephem.Sun()
+
+    current = begin_d
+    while current <= end_d:
+        date_str = current.isoformat()
+        obs.date = date_str
+        try:
+            sr_utc = obs.next_rising(sun).datetime()
+            obs.date = date_str   # reset after next_rising mutates it
+            ss_utc = obs.next_setting(sun).datetime()
+            sr = sr_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+            ss = ss_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+            sr_str = sr.strftime("%H:%M")
+            ss_str = ss.strftime("%H:%M")
+            dl_mins = (ss.hour * 60 + ss.minute) - (sr.hour * 60 + sr.minute)
+            if dl_mins < 0:
+                dl_mins += 1440
+            results.append({
+                "date": date_str,
+                "sunrise": sr_str,
+                "sunset":  ss_str,
+                "sunrise_12h": to_12h(sr_str),
+                "sunset_12h":  to_12h(ss_str),
+                "daylight_hours": round(dl_mins / 60, 2),
+            })
+        except ephem.AlwaysUpError:
+            results.append({"date": date_str, "sunrise": None, "sunset": None,
+                            "sunrise_12h": None, "sunset_12h": None, "daylight_hours": 24.0})
+        except ephem.NeverUpError:
+            results.append({"date": date_str, "sunrise": None, "sunset": None,
+                            "sunrise_12h": None, "sunset_12h": None, "daylight_hours": 0.0})
+        current += timedelta(days=1)
+
+    return results
+
+
 class GeocodeRequest(BaseModel):
     address: str
 

@@ -116,6 +116,14 @@ export async function fetchSolarDay(lat: number, lon: number, date: string): Pro
   return res.json()
 }
 
+export async function fetchSolarRange(
+  lat: number, lon: number, begin: string, end: string
+): Promise<(SolarDay & { date: string })[]> {
+  const res = await fetch(`/api/v1/solar-range?lat=${lat}&lon=${lon}&begin=${begin}&end=${end}`)
+  if (!res.ok) throw new Error('Solar range fetch failed')
+  return res.json()
+}
+
 export function icsUrl(lat: number, lon: number, year: number, options = 'hilo,alerts'): string {
   return `/calendar/${year}/${lat},${lon}.ics?options=${options}`
 }

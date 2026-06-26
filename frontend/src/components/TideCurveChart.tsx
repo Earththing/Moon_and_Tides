@@ -1,10 +1,10 @@
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ReferenceArea, ResponsiveContainer,
-  BarChart, Bar, Legend,
+  BarChart, Bar, Legend, Customized,
 } from 'recharts'
 import { tokens } from '../tokens'
-import type { TideEvent, CurvePoint } from '../api'
+import type { TideEvent, CurvePoint, SolarDay } from '../api'
 
 export interface TideCurveChartProps {
   curveData: CurvePoint[]
@@ -13,6 +13,7 @@ export interface TideCurveChartProps {
   view: 'day' | 'week' | 'month' | 'year'
   stationId: string
   isToday?: boolean
+  solarRange?: (SolarDay & { date: string })[]   // for week/month shading
   showDayNight?: boolean
   sunrise?: string | null   // HH:MM local
   sunset?: string | null    // HH:MM local
@@ -21,7 +22,123 @@ export interface TideCurveChartProps {
 }
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-const TWILIGHT_MINS = 45  // duration of dawn/dusk gradient fade
+const TWILIGHT_MINS = 45        // dawn/dusk transition window (day view)
+const NIGHT_COLOR   = '#0a152a'
+const NIGHT_OPACITY = 0.26
+
+// ── Multi-day day/night overlay (week / month views) ──────────────────────────
+// Recharts Customized gives us the pixel coordinate system.
+// We group hilo data by date, find each day's x-pixel extent from the
+// categorical axis scale, then shade the night fractions of each day.
+type XAxisScale = { (v: string): number; bandwidth(): number }
+interface ChartMaps {
+  xAxisMap?: Record<string, { scale: XAxisScale; x: number; width: number }>
+  yAxisMap?: Record<string, { y: number; height: number }>
+}
+
+function DayNightMultiDay(props: ChartMaps & {
+  solarByDate: Record<string, { sunrise: string | null; sunset: string | null }>
+  chartData: Array<{ x: string }>
+}) {
+  const { solarByDate, chartData, xAxisMap, yAxisMap } = props
+  const xAxis = xAxisMap && Object.values(xAxisMap)[0]
+  const yAxis = yAxisMap && Object.values(yAxisMap)[0]
+  if (!xAxis?.scale || !yAxis || !chartData.length) return null
+
+  const y  = yAxis.y
+  const h  = yAxis.height
+  const bw = typeof xAxis.scale.bandwidth === 'function' ? xAxis.scale.bandwidth() : 0
+
+  // Group x-keys by calendar date
+  const byDate: Record<string, string[]> = {}
+  for (const point of chartData) {
+    const date = point.x.slice(0, 10)
+    if (!byDate[date]) byDate[date] = []
+    byDate[date].push(point.x)
+  }
+
+  const rects: React.ReactNode[] = []
+
+  for (const [date, keys] of Object.entries(byDate)) {
+    const solar = solarByDate[date]
+    if (!solar?.sunrise || !solar?.sunset) continue
+
+    keys.sort()
+    const first = xAxis.scale(keys[0])
+    const last  = xAxis.scale(keys[keys.length - 1]) + bw
+    if (isNaN(first) || isNaN(last) || last <= first) continue
+
+    // The data spans certain hours; map sunrise/sunset proportionally
+    // within the full 24-hour day → pixel positions within [first, last]
+    const pxPerMin = (last - first) / 1440
+
+    const srMins = timeToMins(solar.sunrise)
+    const ssMins = timeToMins(solar.sunset)
+
+    // Pre-dawn: midnight to sunrise
+    if (srMins > 0) {
+      rects.push(
+        <rect key={`pre-${date}`}
+          x={first} y={y}
+          width={Math.max(0, srMins * pxPerMin)} height={h}
+          fill={NIGHT_COLOR} fillOpacity={NIGHT_OPACITY}
+        />
+      )
+      // Dawn gradient: sunrise-TWILIGHT to sunrise
+      const twPx = Math.min(TWILIGHT_MINS * pxPerMin, srMins * pxPerMin)
+      const twLeft = first + srMins * pxPerMin - twPx
+      rects.push(
+        <rect key={`dawn-${date}`}
+          x={twLeft} y={y}
+          width={twPx} height={h}
+          fill={`url(#dawnGradMulti-${date})`} fillOpacity={1}
+        />
+      )
+      rects.push(
+        <defs key={`dawndef-${date}`}>
+          <linearGradient id={`dawnGradMulti-${date}`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor={NIGHT_COLOR} stopOpacity={NIGHT_OPACITY} />
+            <stop offset="100%" stopColor={NIGHT_COLOR} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+      )
+    }
+
+    // Post-sunset: sunset to midnight
+    if (ssMins < 1440) {
+      const duskLeft  = first + ssMins * pxPerMin
+      const nightWidth = last - duskLeft
+      if (nightWidth > 0) {
+        rects.push(
+          <rect key={`post-${date}`}
+            x={duskLeft + Math.min(TWILIGHT_MINS * pxPerMin, nightWidth)} y={y}
+            width={Math.max(0, nightWidth - Math.min(TWILIGHT_MINS * pxPerMin, nightWidth))} height={h}
+            fill={NIGHT_COLOR} fillOpacity={NIGHT_OPACITY}
+          />
+        )
+        // Dusk gradient
+        const twPx = Math.min(TWILIGHT_MINS * pxPerMin, nightWidth)
+        rects.push(
+          <rect key={`dusk-${date}`}
+            x={duskLeft} y={y}
+            width={twPx} height={h}
+            fill={`url(#duskGradMulti-${date})`} fillOpacity={1}
+          />
+        )
+        rects.push(
+          <defs key={`duskdef-${date}`}>
+            <linearGradient id={`duskGradMulti-${date}`} x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%"   stopColor={NIGHT_COLOR} stopOpacity={0} />
+              <stop offset="100%" stopColor={NIGHT_COLOR} stopOpacity={NIGHT_OPACITY} />
+            </linearGradient>
+          </defs>
+        )
+      }
+    }
+  }
+
+  return <g>{rects}</g>
+}
 
 function nowTimeStr(): string {
   const d = new Date()
@@ -85,11 +202,16 @@ function HiloTooltip({ active, payload, label }: {
 
 export default function TideCurveChart({
   curveData, hiloData, floodMinor, view, isToday = false,
-  showDayNight = false, sunrise, sunset,
+  showDayNight = false, sunrise, sunset, solarRange,
   monthlyMeanHigh, monthlyMeanLow,
 }: TideCurveChartProps) {
   const nowSnapped = snapTo6Min(nowTimeStr())
   const canShade = showDayNight && !!sunrise && !!sunset && view === 'day'
+  const canShadeMulti = showDayNight && (view === 'week' || view === 'month') && !!solarRange?.length
+
+  // Build a date-keyed lookup for the multi-day overlay
+  const solarByDate: Record<string, { sunrise: string | null; sunset: string | null }> =
+    Object.fromEntries((solarRange ?? []).map(s => [s.date, { sunrise: s.sunrise, sunset: s.sunset }]))
 
   // Pre-compute twilight boundary times for smooth gradient shading
   const preDawn   = canShade ? offsetTime(sunrise!, -TWILIGHT_MINS) : ''
@@ -169,6 +291,18 @@ export default function TideCurveChart({
             />
             <YAxis tick={{ fontSize: 10, fill: tokens.textSecondary }} unit=" ft" />
             <Tooltip content={<HiloTooltip />} />
+            {/* Day/night shading rendered before the curve so it sits behind */}
+            {canShadeMulti && (
+              <Customized
+                component={(p: unknown) => (
+                  <DayNightMultiDay
+                    {...(p as ChartMaps)}
+                    solarByDate={solarByDate}
+                    chartData={chartData}
+                  />
+                )}
+              />
+            )}
             <Area
               type="monotone"
               dataKey="height_ft"

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   fetchNearestStations, fetchStation, fetchTidesDay, fetchTidesRange,
-  fetchYearSummary, fetchSpecialEvents, fetchSolarDay,
+  fetchYearSummary, fetchSpecialEvents, fetchSolarDay, fetchSolarRange,
   type Station, type TideEvent, type CurvePoint, type SolarDay,
 } from '../api'
 import type { CalOptions } from '../types'
@@ -44,6 +44,7 @@ export default function Dashboard() {
   const [monthlyHigh, setMonthlyHigh] = useState<(number | null)[] | undefined>()
   const [monthlyLow, setMonthlyLow] = useState<(number | null)[] | undefined>()
   const [solar, setSolar] = useState<SolarDay | null>(null)
+  const [solarRange, setSolarRange] = useState<(SolarDay & { date: string })[]>([])
   const [showDayNight, setShowDayNight] = useState(false)
   const [feedItems, setFeedItems] = useState<FeedItem[]>([])
   const [radiusMiles, setRadiusMiles] = useState(50)
@@ -116,11 +117,28 @@ export default function Dashboard() {
     }).catch(console.error)
   }, [selectedId, view, viewDate])
 
-  // Load solar day for day/night shading (day view only)
+  // Load solar day for day/night shading (day view)
   useEffect(() => {
     if (view !== 'day') return
     fetchSolarDay(lat, lon, viewDate).then(setSolar).catch(() => setSolar(null))
   }, [lat, lon, viewDate, view])
+
+  // Load solar range for week/month shading
+  useEffect(() => {
+    if (view !== 'week' && view !== 'month') { setSolarRange([]); return }
+    const base = new Date(viewDate + 'T12:00:00')
+    let begin: string, end: string
+    if (view === 'week') {
+      const e = new Date(base); e.setDate(e.getDate() + 6)
+      begin = base.toISOString().slice(0, 10)
+      end   = e.toISOString().slice(0, 10)
+    } else {
+      begin = viewDate.slice(0, 7) + '-01'
+      const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0)
+      end = lastDay.toISOString().slice(0, 10)
+    }
+    fetchSolarRange(lat, lon, begin, end).then(setSolarRange).catch(() => setSolarRange([]))
+  }, [lat, lon, view, viewDate])
 
   // Load special events for feed
   useEffect(() => {
@@ -240,6 +258,7 @@ export default function Dashboard() {
           showDayNight={showDayNight}
           sunrise={solar?.sunrise ?? null}
           sunset={solar?.sunset ?? null}
+          solarRange={solarRange}
           monthlyMeanHigh={monthlyHigh}
           monthlyMeanLow={monthlyLow}
         />
