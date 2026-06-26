@@ -29,7 +29,13 @@ def _resolve_station(args) -> str:
     if not stations:
         print(f"No NOAA stations found near {location}", file=sys.stderr)
         sys.exit(1)
-    return stations[0]["id"]
+    s = stations[0]
+    # Warn when the station name doesn't match what was searched
+    searched_first_word = location.split()[0].lower()
+    if searched_first_word not in s["name"].lower():
+        print(f"Note: No NOAA station at '{location}'. "
+              f"Using nearest: {s['name']} ({s['distance_miles']:.1f} mi away, #{s['id']})")
+    return s["id"]
 
 
 def cmd_tides(args):

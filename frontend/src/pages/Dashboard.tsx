@@ -29,6 +29,7 @@ export default function Dashboard() {
 
   const [lat, setLat] = useState(DEFAULT_LAT)
   const [lon, setLon] = useState(DEFAULT_LON)
+  const [searchedLocation, setSearchedLocation] = useState('')
   const [stations, setStations] = useState<Station[]>([])
   const [selectedId, setSelectedId] = useState(paramStation ?? '')
   const [selectedStation, setSelectedStation] = useState<Station | null>(null)
@@ -144,7 +145,12 @@ export default function Dashboard() {
       <div className="px-4 py-2 bg-card border-b border-border">
         <div className="max-w-screen-xl mx-auto">
           <LocationSearch
-            onSelect={r => { setLat(r.lat); setLon(r.lon) }}
+            onSelect={r => {
+              setLat(r.lat)
+              setLon(r.lon)
+              // Store first two parts of display name, e.g. "Edmonds, Snohomish County"
+              setSearchedLocation(r.display_name.split(',').slice(0, 2).join(',').trim())
+            }}
             placeholder="Search city or address…"
           />
         </div>
@@ -153,6 +159,8 @@ export default function Dashboard() {
       <TopBar
         stationName={selectedStation?.name ?? '…'}
         stationId={selectedId}
+        searchedLocation={searchedLocation}
+        distanceMiles={stations.find(s => s.id === selectedId)?.distance_miles}
         view={view}
         onViewChange={setView}
       />
