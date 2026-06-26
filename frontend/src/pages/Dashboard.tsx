@@ -6,6 +6,7 @@ import {
   type Station, type TideEvent, type CurvePoint,
 } from '../api'
 import type { CalOptions } from '../types'
+import { saveStation } from '../station-store'
 import NavBar from '../components/NavBar'
 import TopBar from '../components/TopBar'
 import TideCurveChart from '../components/TideCurveChart'
@@ -60,6 +61,12 @@ export default function Dashboard() {
     }).catch(console.error)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lat, lon])
+
+  // Persist selected station so NavBar and AlertsPage can always find it
+  useEffect(() => {
+    if (!selectedId) return
+    saveStation(selectedId, year)
+  }, [selectedId, year])
 
   // Load selected station detail
   useEffect(() => {

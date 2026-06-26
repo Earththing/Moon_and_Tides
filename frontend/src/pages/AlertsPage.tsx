@@ -3,6 +3,7 @@ import { useSearchParams, Link } from 'react-router-dom'
 import NavBar from '../components/NavBar'
 import { fetchSpecialEvents, fetchStation, type Station } from '../api'
 import type { FeedItem } from '../components/ComingUpFeed'
+import { loadStation } from '../station-store'
 
 const TYPE_STYLES = {
   alert:       { bg: '#fffaf0', border: '#e8c060', text: '#a06000', emoji: '⚠️' },
@@ -47,8 +48,11 @@ function buildFeedItems(ev: Awaited<ReturnType<typeof fetchSpecialEvents>>): Fee
 
 export default function AlertsPage() {
   const [params] = useSearchParams()
-  const stationId = params.get('station') ?? ''
-  const year = Number(params.get('year') ?? new Date().getFullYear())
+  // Fall back to localStorage so the Alerts tab always works, even when
+  // navigated directly from the NavBar without query params.
+  const saved = loadStation()
+  const stationId = params.get('station') ?? saved?.id ?? ''
+  const year = Number(params.get('year') ?? saved?.year ?? new Date().getFullYear())
 
   const [station, setStation] = useState<Station | null>(null)
   const [items, setItems] = useState<FeedItem[] | null>(null)
