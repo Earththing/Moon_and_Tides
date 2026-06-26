@@ -209,7 +209,7 @@ export default function Dashboard() {
           {hasFeed && (
             <ComingUpFeed
               items={feedItems}
-              onViewAll={() => navigate('/alerts')}
+              onViewAll={() => navigate(`/alerts?station=${selectedId}&year=${year}`)}
             />
           )}
         </div>
