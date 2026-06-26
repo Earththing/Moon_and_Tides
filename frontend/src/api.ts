@@ -1,0 +1,99 @@
+export interface TideEvent {
+  date: string
+  time: string
+  time_12h: string
+  height_ft: number
+  type: 'H' | 'L'
+}
+
+export interface CurvePoint {
+  date: string
+  time: string
+  time_12h: string
+  height_ft: number
+}
+
+export interface Station {
+  id: string
+  name: string
+  lat: number
+  lon: number
+  state: string
+  tidal: number
+  harmonic: number
+  distance_miles?: number
+  tidal_type?: string
+  mean_range_ft?: number | null
+  mean_high_ft?: number | null
+  mean_low_ft?: number | null
+  has_flood_thresholds?: boolean
+  flood_minor_ft?: number | null
+  flood_moderate_ft?: number | null
+}
+
+export interface GeocodeResult {
+  lat: number
+  lon: number
+  display_name: string
+}
+
+export interface YearSummary {
+  monthly_mean_high: (number | null)[]
+  monthly_mean_low: (number | null)[]
+  extreme_highs: TideEvent[]
+  extreme_lows: TideEvent[]
+}
+
+export interface SpecialEvents {
+  tidepooling_windows: unknown[]
+  slack_water: unknown[]
+  perigean_spring_tides: unknown[]
+  radius_alerts: unknown[]
+  flood_risk: unknown[]
+}
+
+export async function geocode(address: string): Promise<GeocodeResult[]> {
+  const res = await fetch('/geocode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ address }),
+  })
+  if (!res.ok) throw new Error('Geocode failed')
+  return res.json()
+}
+
+export async function fetchNearestStations(lat: number, lon: number, count = 5): Promise<Station[]> {
+  const res = await fetch(`/api/v1/stations/nearest?lat=${lat}&lon=${lon}&count=${count}`)
+  if (!res.ok) throw new Error('Stations fetch failed')
+  return res.json()
+}
+
+export async function fetchStation(id: string): Promise<Station> {
+  const res = await fetch(`/api/v1/station/${id}`)
+  if (!res.ok) throw new Error('Station fetch failed')
+  return res.json()
+}
+
+export async function fetchTidesDay(stationId: string, date: string): Promise<{ hilo: TideEvent[]; curve: CurvePoint[] }> {
+  const res = await fetch(`/api/v1/tides/day?station_id=${stationId}&date=${date}`)
+  if (!res.ok) throw new Error('Tides fetch failed')
+  return res.json()
+}
+
+export async function fetchYearSummary(stationId: string, year: number): Promise<YearSummary> {
+  const res = await fetch(`/api/v1/tides/year-summary?station_id=${stationId}&year=${year}`)
+  if (!res.ok) throw new Error('Year summary fetch failed')
+  return res.json()
+}
+
+export async function fetchSpecialEvents(stationId: string, year: number, lat?: number, lon?: number): Promise<SpecialEvents> {
+  let url = `/api/v1/special-events?station_id=${stationId}&year=${year}`
+  if (lat !== undefined && lon !== undefined) url += `&lat=${lat}&lon=${lon}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('Special events fetch failed')
+  return res.json()
+}
+
+export function icsUrl(lat: number, lon: number, year: number, options = 'hilo,alerts'): string {
+  return `/calendar/${year}/${lat},${lon}.ics?options=${options}`
+}

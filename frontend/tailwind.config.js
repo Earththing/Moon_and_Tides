@@ -1,0 +1,29 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        ocean:       '#1b3a5c',
+        oceanLight:  '#1b7faa',
+        sky:         '#5bbfde',
+        sea:         '#2a9e6a',
+        surface:     '#f0f4f8',
+        card:        '#ffffff',
+        cardAlt:     '#f8fafb',
+        border:      '#d0d8e4',
+        borderLight: '#e8eef4',
+        textPrimary:   '#1b3a5c',
+        textSecondary: '#7a8fa3',
+        textHint:      '#a0b0bf',
+        amberBorder: '#e8c060',
+        amberBg:     '#fffaf0',
+        amberText:   '#a06000',
+        goodBorder:  '#a8dfc0',
+        goodBg:      '#f4fbf7',
+        danger:      '#a32d2d',
+      },
+    },
+  },
+  plugins: [],
+}
