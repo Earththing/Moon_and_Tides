@@ -64,6 +64,15 @@ def _db_conn() -> sqlite3.Connection:
             computed_at TIMESTAMP
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS solar_days (
+            lat  REAL NOT NULL,
+            lon  REAL NOT NULL,
+            date TEXT NOT NULL,
+            json_data TEXT NOT NULL,
+            PRIMARY KEY (lat, lon, date)
+        )
+    """)
     conn.commit()
     return conn
 
