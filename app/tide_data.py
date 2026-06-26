@@ -118,6 +118,22 @@ def _fetch_noaa_hilo(station_id: str, year: int, datum: str, units: str, time_zo
     return _parse_hilo(raw)
 
 
+def to_12h(time_str: str) -> str:
+    """Convert 'HH:MM' to '12-hour AM/PM' (e.g. '04:21' → '4:21 AM')."""
+    h, m = int(time_str[:2]), int(time_str[3:])
+    suffix = "AM" if h < 12 else "PM"
+    h12 = h % 12 or 12
+    return f"{h12}:{m:02d} {suffix}"
+
+
+def _add_12h(records: list[dict]) -> list[dict]:
+    """Add time_12h to any record that has a 'time' field but is missing time_12h."""
+    for r in records:
+        if "time" in r and "time_12h" not in r:
+            r["time_12h"] = to_12h(r["time"])
+    return records
+
+
 def _parse_hilo(raw: list[dict]) -> list[dict]:
     result = []
     for item in raw:
@@ -126,9 +142,10 @@ def _parse_hilo(raw: list[dict]) -> list[dict]:
             dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
         except ValueError:
             continue
+        time_24 = dt.strftime("%H:%M")
         result.append({
             "date": dt.strftime("%Y-%m-%d"),
-            "time": dt.strftime("%H:%M"),
+            "time": time_24,
             "height_ft": float(item.get("v", 0)),
             "type": item.get("type", "").upper(),
         })
@@ -175,7 +192,7 @@ def get_hilo_predictions(
     begin_str = begin_dt.strftime("%Y-%m-%d")
     end_str = end_dt.strftime("%Y-%m-%d")
     filtered = [r for r in all_records if begin_str <= r["date"] <= end_str]
-    return filtered
+    return _add_12h(filtered)
 
 
 def get_water_level_curve(
@@ -190,7 +207,7 @@ def get_water_level_curve(
 
     if cached is not None:
         date_str = dt.strftime("%Y-%m-%d")
-        return [r for r in cached if r["date"] == date_str]
+        return _add_12h([r for r in cached if r["date"] == date_str])
 
     params = {
         "product": "predictions",
@@ -226,7 +243,8 @@ def get_water_level_curve(
 
     _cache_put(station_id, year, "curve", datum, units, records)
     date_str = dt.strftime("%Y-%m-%d")
-    return [r for r in records if r["date"] == date_str]
+    day_records = [r for r in records if r["date"] == date_str]
+    return _add_12h(day_records)
 
 
 def get_station_tidal_range(station_id: str) -> dict:

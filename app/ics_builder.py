@@ -112,11 +112,12 @@ def build_tidal_ics(
             nxt = next_tide.get(i)
             if nxt:
                 nxt_label = "low" if tide_type == "H" else "high"
+                nxt_time = f"{nxt['time']} ({nxt['time_12h']})" if "time_12h" in nxt else nxt["time"]
                 desc = (
                     f"Height: {h} ft ({h_m} m)\n"
                     f"Datum: MLLW\n"
                     f"Station: {station_name} ({station_id})\n"
-                    f"Next {nxt_label} tide: {nxt['time']} — {nxt['height_ft']} ft"
+                    f"Next {nxt_label} tide: {nxt_time} — {nxt['height_ft']} ft"
                 )
             else:
                 desc = (

@@ -46,14 +46,17 @@ def cmd_tides(args):
         begin = f"{year}0101"
         end = f"{year}1231"
 
+    count = getattr(args, "count", 20)
     data = get_hilo_predictions(station_id, begin, end)
     print(f"Station: {station_id}  |  {len(data)} tide events")
-    print(f"{'Date':<12} {'Time':<6} {'Type':<5} {'Height (ft)'}")
-    print("-" * 40)
-    for item in data[:20]:
-        print(f"{item['date']:<12} {item['time']:<6} {item['type']:<5} {item['height_ft']:.2f}")
-    if len(data) > 20:
-        print(f"... and {len(data) - 20} more")
+    print(f"{'Date':<12} {'Time':<22} {'Type':<5} {'Height (ft)'}")
+    print("-" * 56)
+    for item in data[:count]:
+        t = f"{item['time']} ({item['time_12h']})"
+        print(f"{item['date']:<12} {t:<22} {item['type']:<5} {item['height_ft']:.2f}")
+    if len(data) > count:
+        print(f"... and {len(data) - count} more  (use --count N to show more)")
+    print("\nTip: use 'tideline ics' to download a calendar file.")
 
 
 def cmd_stations(args):
@@ -119,10 +122,10 @@ def cmd_extremes(args):
     print(f"Station: {station_id}  |  Year: {year}")
     print("\nTop 10 Highest Tides:")
     for item in highs[:10]:
-        print(f"  {item['date']} {item['time']}  {item['height_ft']:.2f} ft")
+        print(f"  {item['date']} {item['time']} ({item['time_12h']})  {item['height_ft']:.2f} ft")
     print("\nTop 10 Lowest Tides:")
     for item in lows[:10]:
-        print(f"  {item['date']} {item['time']}  {item['height_ft']:.2f} ft")
+        print(f"  {item['date']} {item['time']} ({item['time_12h']})  {item['height_ft']:.2f} ft")
 
 
 def cmd_preview(args):
@@ -133,7 +136,7 @@ def cmd_preview(args):
     data = get_hilo_predictions(station_id, today, today)
     print(f"Today's tides at {station_id}:")
     for item in data:
-        print(f"  {item['time']}  {item['type']}  {item['height_ft']:.2f} ft")
+        print(f"  {item['time']} ({item['time_12h']})  {item['type']}  {item['height_ft']:.2f} ft")
 
 
 def main():
@@ -141,13 +144,14 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # tides
-    p_tides = sub.add_parser("tides")
+    p_tides = sub.add_parser("tides", help="Show tide predictions (use 'ics' to download a calendar file)")
     p_tides.add_argument("location", nargs="?")
     p_tides.add_argument("--station")
     p_tides.add_argument("--lat", type=float)
     p_tides.add_argument("--lon", type=float)
     p_tides.add_argument("--year", type=int)
     p_tides.add_argument("--date")
+    p_tides.add_argument("--count", type=int, default=20, help="Number of events to display")
 
     # stations
     p_stations = sub.add_parser("stations")

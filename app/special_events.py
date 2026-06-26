@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, date
 
 import ephem
 
+from app.tide_data import to_12h
+
 
 BORE_OFFSETS = {
     "turnagain_arm_ak": {"ref_station": "9455090", "offset_hours": 2.5},
@@ -52,7 +54,7 @@ def get_slack_water(station_id: str, date: str) -> list[dict]:
         # Sign change = inflection point (tide reversal)
         if prev_diff * next_diff < 0:
             direction = "high_to_low" if prev_diff > 0 else "low_to_high"
-            slacks.append({"time": times[i], "between": direction})
+            slacks.append({"time": times[i], "time_12h": to_12h(times[i]), "between": direction})
     return slacks
 
 
@@ -98,9 +100,12 @@ def get_tidepooling_windows(
                     results.append({
                         "date": date_str,
                         "low_tide_time": low_time,
+                        "low_tide_time_12h": to_12h(low_time),
                         "low_height_ft": lowest["height_ft"],
                         "sunrise": solar["sunrise"],
+                        "sunrise_12h": to_12h(solar["sunrise"]),
                         "sunset": solar["sunset"],
+                        "sunset_12h": to_12h(solar["sunset"]),
                         "score": round(score, 3),
                     })
         current += timedelta(days=1)
@@ -212,9 +217,12 @@ def get_tidal_bore_times(location_name: str, date: str) -> dict | None:
     for low in lows:
         low_dt = datetime.strptime(f"{low['date']} {low['time']}", "%Y-%m-%d %H:%M")
         bore_dt = low_dt + timedelta(hours=bore["offset_hours"])
+        bore_time = bore_dt.strftime("%H:%M")
         results.append({
-            "bore_time": bore_dt.strftime("%H:%M"),
+            "bore_time": bore_time,
+            "bore_time_12h": to_12h(bore_time),
             "ref_low_time": low["time"],
+            "ref_low_time_12h": to_12h(low["time"]),
             "offset_hours": bore["offset_hours"],
         })
     return {"location": location_name, "date": date, "bore_times": results}
