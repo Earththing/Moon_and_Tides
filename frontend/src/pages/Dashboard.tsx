@@ -9,6 +9,7 @@ import type { CalOptions } from '../types'
 import { saveStation } from '../station-store'
 import NavBar from '../components/NavBar'
 import TopBar from '../components/TopBar'
+import DateNav from '../components/DateNav'
 import TideCurveChart from '../components/TideCurveChart'
 import NearbyStations from '../components/NearbyStations'
 import TidePanel from '../components/TidePanel'
@@ -36,6 +37,7 @@ export default function Dashboard() {
   const [selectedStation, setSelectedStation] = useState<Station | null>(null)
   const [view, setView] = useState<'day' | 'week' | 'month' | 'year'>('day')
   const [year] = useState(paramYear ? Number(paramYear) : CURRENT_YEAR)
+  const [viewDate, setViewDate] = useState(todayStr())
   const [todayEvents, setTodayEvents] = useState<TideEvent[]>([])
   const [curveData, setCurveData] = useState<CurvePoint[]>([])
   const [monthlyHigh, setMonthlyHigh] = useState<(number | null)[] | undefined>()
@@ -74,14 +76,14 @@ export default function Dashboard() {
     fetchStation(selectedId).then(setSelectedStation).catch(console.error)
   }, [selectedId])
 
-  // Load today's tides + curve
+  // Load tides + curve for the viewed date
   useEffect(() => {
     if (!selectedId) return
-    fetchTidesDay(selectedId, todayStr()).then(({ hilo, curve }) => {
+    fetchTidesDay(selectedId, viewDate).then(({ hilo, curve }) => {
       setTodayEvents(hilo)
       setCurveData(curve)
     }).catch(console.error)
-  }, [selectedId])
+  }, [selectedId, viewDate])
 
   // Load year summary for year view
   useEffect(() => {
@@ -172,6 +174,23 @@ export default function Dashboard() {
         onViewChange={setView}
       />
 
+      <DateNav
+        date={viewDate}
+        isToday={viewDate === todayStr()}
+        onPrev={() => {
+          const d = new Date(viewDate + 'T12:00:00')
+          d.setDate(d.getDate() - 1)
+          setViewDate(d.toISOString().slice(0, 10))
+        }}
+        onNext={() => {
+          const d = new Date(viewDate + 'T12:00:00')
+          d.setDate(d.getDate() + 1)
+          setViewDate(d.toISOString().slice(0, 10))
+        }}
+        onDateChange={setViewDate}
+        onToday={() => setViewDate(todayStr())}
+      />
+
       <div className="max-w-screen-xl mx-auto w-full px-4 py-3 space-y-3">
         {/* Tide curve */}
         <TideCurveChart
@@ -180,6 +199,7 @@ export default function Dashboard() {
           floodMinor={selectedStation?.flood_minor_ft ?? undefined}
           view={view}
           stationId={selectedId}
+          isToday={viewDate === todayStr()}
           monthlyMeanHigh={monthlyHigh}
           monthlyMeanLow={monthlyLow}
         />

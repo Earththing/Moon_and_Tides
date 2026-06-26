@@ -1,0 +1,238 @@
+/**
+ * delete_tide_events.gs
+ * 
+ * Deletes calendar events that match the exact title patterns from the
+ * my_tides.ics import:
+ *   - 🌊 High Tide — ...
+ *   - 🏖 Low Tide — ...
+ *   - ⚠️ King Tide — ...
+ *   - ⚠️ Extreme Low — ...
+ *
+ * Handles Google's rate limiting by pausing when throttled and resuming.
+ * Uses script properties to track progress across multiple runs if needed.
+ * 
+ * HOW TO USE:
+ * 1. Go to https://script.google.com
+ * 2. Click "New project"
+ * 3. Delete any existing code and paste this entire script
+ * 4. Set CALENDAR_NAME below to the name of the calendar you imported into
+ * 5. Set DRY_RUN = true first to preview what will be deleted without deleting
+ * 6. Click Save, then Run — select "deleteTideEvents" in the dropdown
+ * 7. First run: approve permissions when prompted
+ * 8. Check the Execution log at the bottom for results
+ * 9. When satisfied, set DRY_RUN = false and run again to actually delete
+ * 10. If you hit rate limits, just run again — it will pick up where it left off
+ */
+
+// ============================================================
+// CONFIGURATION — edit these before running
+// ============================================================
+
+// The exact name of the calendar to delete from.
+// Find this in the left sidebar of Google Calendar (calendar.google.com).
+var CALENDAR_NAME = "YOUR CALENDAR NAME HERE";
+
+// Set to true to preview without deleting. Set to false to actually delete.
+var DRY_RUN = true;
+
+// Date range to search (covers the full year of the ICS import)
+var START_DATE = new Date('2026-01-01T00:00:00');
+var END_DATE   = new Date('2027-01-01T00:00:00');
+
+// Delay in milliseconds between each deletion (200ms = ~300/min, well under limits)
+var DELAY_MS = 200;
+
+// How many events to delete per run before stopping to avoid timeouts
+// Google Apps Script has a 6-minute execution limit
+var MAX_PER_RUN = 250;
+
+// ============================================================
+// Title prefixes from the ICS file — do not edit
+// ============================================================
+var TIDE_PREFIXES = [
+  '🌊 High Tide',
+  '🏖 Low Tide',
+  '⚠️ King Tide',
+  '⚠️ Extreme Low'
+];
+
+// ============================================================
+// Main function
+// ============================================================
+function deleteTideEvents() {
+  
+  if (CALENDAR_NAME === "YOUR CALENDAR NAME HERE") {
+    Logger.log('ERROR: Please set CALENDAR_NAME before running.');
+    listCalendars();
+    return;
+  }
+  
+  // Find the target calendar by name
+  var allCalendars = CalendarApp.getAllCalendars();
+  var targetCalendar = null;
+  
+  for (var c = 0; c < allCalendars.length; c++) {
+    if (allCalendars[c].getName() === CALENDAR_NAME) {
+      targetCalendar = allCalendars[c];
+      break;
+    }
+  }
+  
+  if (!targetCalendar) {
+    Logger.log('ERROR: Calendar "' + CALENDAR_NAME + '" not found. Available calendars:');
+    listCalendars();
+    return;
+  }
+  
+  Logger.log('Target calendar: "' + targetCalendar.getName() + '"');
+  Logger.log('Mode: ' + (DRY_RUN ? 'DRY RUN (no deletions)' : 'LIVE (will delete)'));
+  Logger.log('Max deletions this run: ' + MAX_PER_RUN);
+  Logger.log('Delay between deletions: ' + DELAY_MS + 'ms');
+  Logger.log('');
+  
+  // Get progress from previous runs
+  var props = PropertiesService.getScriptProperties();
+  var totalDeletedAllRuns = parseInt(props.getProperty('totalDeleted') || '0');
+  Logger.log('Previously deleted in earlier runs: ' + totalDeletedAllRuns);
+  
+  // Get all events in the date range
+  var events = targetCalendar.getEvents(START_DATE, END_DATE);
+  Logger.log('Events remaining in calendar: ' + events.length);
+  Logger.log('');
+  
+  var matchedThisRun = 0;
+  var deletedThisRun = 0;
+  var skippedThisRun = 0;
+  var errors = 0;
+  
+  for (var i = 0; i < events.length; i++) {
+    
+    // Stop if we've hit the per-run limit
+    if (deletedThisRun >= MAX_PER_RUN) {
+      Logger.log('Hit MAX_PER_RUN limit (' + MAX_PER_RUN + '). Run the script again to continue.');
+      break;
+    }
+    
+    var event = events[i];
+    var title = event.getTitle();
+    
+    // Check if title starts with any of the ICS prefix patterns
+    var isTideEvent = false;
+    for (var p = 0; p < TIDE_PREFIXES.length; p++) {
+      if (title.indexOf(TIDE_PREFIXES[p]) === 0) {
+        isTideEvent = true;
+        break;
+      }
+    }
+    
+    if (!isTideEvent) {
+      skippedThisRun++;
+      continue;
+    }
+    
+    matchedThisRun++;
+    
+    if (DRY_RUN) {
+      Logger.log('[DRY RUN] Would delete: "' + title + '" on ' + event.getStartTime());
+      deletedThisRun++; // count for dry run limit too
+      continue;
+    }
+    
+    // Attempt deletion with retry on rate limit
+    var attempts = 0;
+    var maxAttempts = 3;
+    var success = false;
+    
+    while (attempts < maxAttempts && !success) {
+      try {
+        event.deleteEvent();
+        success = true;
+        deletedThisRun++;
+        totalDeletedAllRuns++;
+        
+        // Progress log every 50
+        if (deletedThisRun % 50 === 0) {
+          Logger.log('Deleted ' + deletedThisRun + ' this run (' + totalDeletedAllRuns + ' total across all runs)...');
+        }
+        
+        // Polite delay between deletions
+        Utilities.sleep(DELAY_MS);
+        
+      } catch (e) {
+        attempts++;
+        var errMsg = e.toString();
+        
+        if (errMsg.indexOf('too many') !== -1 || errMsg.indexOf('rate') !== -1 || errMsg.indexOf('quota') !== -1) {
+          // Rate limit hit — wait longer and retry
+          Logger.log('Rate limit hit after ' + deletedThisRun + ' deletions. Waiting 10 seconds before retry ' + attempts + '/' + maxAttempts + '...');
+          Utilities.sleep(10000);
+        } else {
+          // Other error — log and move on
+          Logger.log('Error deleting "' + title + '": ' + errMsg);
+          errors++;
+          break;
+        }
+      }
+    }
+    
+    if (!success && attempts >= maxAttempts) {
+      Logger.log('Failed to delete "' + title + '" after ' + maxAttempts + ' attempts. Will retry on next run.');
+      errors++;
+    }
+  }
+  
+  // Save progress
+  if (!DRY_RUN) {
+    props.setProperty('totalDeleted', totalDeletedAllRuns.toString());
+  }
+  
+  Logger.log('');
+  Logger.log('========================================');
+  if (DRY_RUN) {
+    Logger.log('DRY RUN COMPLETE');
+    Logger.log('Would delete: ' + matchedThisRun + ' tide events found this scan');
+    Logger.log('Set DRY_RUN = false and run again to actually delete.');
+  } else {
+    Logger.log('RUN COMPLETE');
+    Logger.log('Deleted this run:        ' + deletedThisRun);
+    Logger.log('Total deleted all runs:  ' + totalDeletedAllRuns);
+    Logger.log('Errors this run:         ' + errors);
+    
+    // Check if there are more to delete
+    var remaining = targetCalendar.getEvents(START_DATE, END_DATE).length;
+    var remainingTide = 0;
+    var checkEvents = targetCalendar.getEvents(START_DATE, END_DATE);
+    for (var j = 0; j < checkEvents.length; j++) {
+      var t = checkEvents[j].getTitle();
+      for (var p = 0; p < TIDE_PREFIXES.length; p++) {
+        if (t.indexOf(TIDE_PREFIXES[p]) === 0) {
+          remainingTide++;
+          break;
+        }
+      }
+    }
+    
+    if (remainingTide > 0) {
+      Logger.log('');
+      Logger.log('⚠️  ' + remainingTide + ' tide events still remain. Run the script again to continue.');
+    } else {
+      Logger.log('');
+      Logger.log('✅ All tide events have been deleted!');
+      // Clear saved progress
+      props.deleteProperty('totalDeleted');
+    }
+  }
+  Logger.log('========================================');
+}
+
+// ============================================================
+// Helper — lists all calendars (useful for finding the right name)
+// ============================================================
+function listCalendars() {
+  var calendars = CalendarApp.getAllCalendars();
+  Logger.log('');
+  Logger.log('Your calendars:');
+  for (var i = 0; i < calendars.length; i++) {
+    Logger.log('  "' + calendars[i].getName() + '"');
+  }
+}

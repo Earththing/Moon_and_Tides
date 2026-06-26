@@ -241,6 +241,34 @@ python -m pytest tests/ -m "live" -v
 
 ---
 
+## Imported events into the wrong Google Calendar?
+
+If you accidentally import the `.ics` file into the wrong Google Calendar, use the included cleanup script to delete all tide events without having to remove them one by one.
+
+**The script:** `scripts/delete_tide_events.gs`
+
+**Steps:**
+
+1. Go to [script.google.com](https://script.google.com) and click **New project**
+2. Delete any existing code and paste the entire contents of `scripts/delete_tide_events.gs`
+3. Set `CALENDAR_NAME` to the exact name of the calendar you imported into (find it in the left sidebar of Google Calendar)
+4. Leave `DRY_RUN = true` for now
+5. Click **Save**, then **Run** — select `deleteTideEvents` in the dropdown
+6. On first run, approve the permissions Google asks for
+7. Check the **Execution log** at the bottom — it will list all tide events it *would* delete
+8. If the list looks right, change `DRY_RUN = false` and run again to actually delete
+9. If you hit Google's rate limits, just run again — the script tracks progress and picks up where it left off
+
+The script deletes events matching these title patterns:
+- `🌊 High Tide —`
+- `🏖 Low Tide —`
+- `⚠️ King Tide —`
+- `⚠️ Extreme Low —`
+
+It will not touch any other events in the calendar.
+
+---
+
 ## Project structure
 
 ```
@@ -254,6 +282,8 @@ app/
   cli.py             — tideline command
   main.py            — FastAPI web server
 mcp_server.py        — MCP server for Claude Desktop
+scripts/
+  delete_tide_events.gs  — Google Apps Script to remove imported tide events
 tests/               — 44 tests, all passing
 cache/               — SQLite cache (gitignored)
 ```
@@ -266,3 +296,4 @@ cache/               — SQLite cache (gitignored)
 - Tidal heights are relative to MLLW (Mean Lower Low Water) by default.
 - Times are shown in local standard/daylight time for the station's location.
 - The `tideline` command is available after `pip install -e .`. Without it, use `python -m app.cli` as a drop-in replacement for every example above.
+- No NOAA station exists at every address — the app always uses the nearest available station and tells you the distance. For Edmonds WA, that's Seattle (#9447130, ~14 miles).

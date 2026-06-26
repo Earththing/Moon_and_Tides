@@ -12,6 +12,7 @@ export interface TideCurveChartProps {
   floodMinor?: number
   view: 'day' | 'week' | 'month' | 'year'
   stationId: string
+  isToday?: boolean
   monthlyMeanHigh?: (number | null)[]
   monthlyMeanLow?: (number | null)[]
 }
@@ -23,11 +24,21 @@ function nowTimeStr(): string {
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
+// Snap HH:MM to the nearest 6-minute boundary so it matches a curve data point.
+// Curve data arrives in 6-min intervals: 00:00, 00:06, 00:12 …
+function snapTo6Min(timeStr: string): string {
+  const [h, m] = timeStr.split(':').map(Number)
+  const snapped = Math.round((h * 60 + m) / 6) * 6
+  const sh = Math.floor(snapped / 60) % 24
+  const sm = snapped % 60
+  return `${String(sh).padStart(2, '0')}:${String(sm).padStart(2, '0')}`
+}
+
 export default function TideCurveChart({
-  curveData, hiloData, floodMinor, view,
+  curveData, hiloData, floodMinor, view, isToday = false,
   monthlyMeanHigh, monthlyMeanLow,
 }: TideCurveChartProps) {
-  const nowStr = nowTimeStr()
+  const nowSnapped = snapTo6Min(nowTimeStr())
 
   if (view === 'year' && monthlyMeanHigh && monthlyMeanLow) {
     const data = MONTHS.map((m, i) => ({
@@ -36,9 +47,9 @@ export default function TideCurveChart({
       low: monthlyMeanLow[i] ?? 0,
     }))
     return (
-      <div className="w-full h-48 bg-card rounded border border-border p-2">
+      <div className="w-full h-64 bg-card rounded border border-border p-2">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <BarChart data={data} margin={{ top: 24, right: 12, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={tokens.borderLight} />
             <XAxis dataKey="month" tick={{ fontSize: 11, fill: tokens.textSecondary }} />
             <YAxis tick={{ fontSize: 11, fill: tokens.textSecondary }} unit=" ft" />
@@ -56,16 +67,17 @@ export default function TideCurveChart({
     ? hiloData.map(d => ({ time: `${d.date} ${d.time}`, height_ft: d.height_ft, type: d.type }))
     : curveData.map(d => ({ time: d.time, height_ft: d.height_ft }))
 
-  const xKey = 'time'
-
   return (
-    <div className="w-full h-48 bg-card rounded border border-border p-2">
-      {/* Sentinel div for flood line — Recharts SVG content doesn't render in jsdom */}
+    <div className="w-full h-64 bg-card rounded border border-border p-2">
+      {/* Sentinel for tests — Recharts SVG doesn't render in jsdom */}
       {floodMinor !== undefined && (
         <span data-testid="flood-line-sentinel" style={{ display: 'none' }} />
       )}
+      {isToday && (
+        <span data-testid="now-line-sentinel" style={{ display: 'none' }} />
+      )}
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <AreaChart data={chartData} margin={{ top: 24, right: 12, bottom: 0, left: 0 }}>
           <defs>
             <linearGradient id="tideGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor={tokens.oceanLight} stopOpacity={0.20} />
@@ -74,7 +86,7 @@ export default function TideCurveChart({
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke={tokens.borderLight} />
           <XAxis
-            dataKey={xKey}
+            dataKey="time"
             tick={{ fontSize: 10, fill: tokens.textSecondary }}
             interval="preserveStartEnd"
           />
@@ -88,23 +100,28 @@ export default function TideCurveChart({
             fill="url(#tideGrad)"
             dot={false}
           />
-          {view === 'day' && (
+
+          {/* "Now" line — only on today's view, snapped to nearest 6-min data point */}
+          {isToday && view === 'day' && (
             <ReferenceLine
-              x={nowStr}
+              x={nowSnapped}
               stroke={tokens.sky}
+              strokeWidth={2}
               strokeDasharray="4 3"
-              label={{ value: 'now', position: 'top', fontSize: 10, fill: tokens.sky }}
+              label={{ value: 'now', position: 'insideTopRight', fontSize: 10, fill: tokens.sky }}
             />
           )}
+
           {floodMinor !== undefined && (
             <ReferenceLine
               y={floodMinor}
               stroke={tokens.danger}
               strokeDasharray="4 3"
-              label={{ value: 'flood', position: 'right', fontSize: 10, fill: tokens.danger }}
+              label={{ value: 'flood', position: 'insideTopRight', fontSize: 10, fill: tokens.danger }}
               ifOverflow="extendDomain"
             />
           )}
+
           {hiloData.map((d, i) => (
             <ReferenceDot
               key={i}
@@ -114,7 +131,12 @@ export default function TideCurveChart({
               fill={d.type === 'H' ? tokens.oceanLight : tokens.sea}
               stroke="white"
               strokeWidth={1}
-              label={{ value: `${d.height_ft.toFixed(1)}`, position: 'top', fontSize: 9, fill: tokens.textSecondary }}
+              label={{
+                value: `${d.height_ft.toFixed(1)}`,
+                position: d.type === 'H' ? 'top' : 'bottom',
+                fontSize: 9,
+                fill: tokens.textSecondary,
+              }}
             />
           ))}
         </AreaChart>
