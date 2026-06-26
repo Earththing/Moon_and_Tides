@@ -2,6 +2,11 @@ import argparse
 import sys
 from datetime import datetime
 
+# Windows terminals default to cp1252 which can't render emoji.
+# Reconfigure stdout to UTF-8 so the count table prints cleanly.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 
 def _resolve_station(args) -> str:
     if hasattr(args, "station") and args.station:
