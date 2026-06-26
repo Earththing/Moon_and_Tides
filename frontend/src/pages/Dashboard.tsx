@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  fetchNearestStations, fetchStation, fetchTidesDay,
-  fetchYearSummary, fetchSpecialEvents,
-  type Station, type TideEvent, type CurvePoint,
+  fetchNearestStations, fetchStation, fetchTidesDay, fetchTidesRange,
+  fetchYearSummary, fetchSpecialEvents, fetchSolarDay,
+  type Station, type TideEvent, type CurvePoint, type SolarDay,
 } from '../api'
 import type { CalOptions } from '../types'
 import { saveStation } from '../station-store'
@@ -40,8 +40,11 @@ export default function Dashboard() {
   const [viewDate, setViewDate] = useState(todayStr())
   const [todayEvents, setTodayEvents] = useState<TideEvent[]>([])
   const [curveData, setCurveData] = useState<CurvePoint[]>([])
+  const [rangeEvents, setRangeEvents] = useState<TideEvent[]>([])   // week/month hilo
   const [monthlyHigh, setMonthlyHigh] = useState<(number | null)[] | undefined>()
   const [monthlyLow, setMonthlyLow] = useState<(number | null)[] | undefined>()
+  const [solar, setSolar] = useState<SolarDay | null>(null)
+  const [showDayNight, setShowDayNight] = useState(false)
   const [feedItems, setFeedItems] = useState<FeedItem[]>([])
   const [radiusMiles, setRadiusMiles] = useState(50)
   const [radiusStations, setRadiusStations] = useState<Station[]>([])
@@ -85,14 +88,39 @@ export default function Dashboard() {
     }).catch(console.error)
   }, [selectedId, viewDate])
 
+  // Load week/month range hilo data
+  useEffect(() => {
+    if (!selectedId || (view !== 'week' && view !== 'month')) return
+    const base = new Date(viewDate + 'T12:00:00')
+    let begin: string, end: string
+    if (view === 'week') {
+      const e = new Date(base); e.setDate(e.getDate() + 6)
+      begin = base.toISOString().slice(0, 10)
+      end   = e.toISOString().slice(0, 10)
+    } else {
+      // Full calendar month
+      begin = viewDate.slice(0, 7) + '-01'
+      const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0)
+      end = lastDay.toISOString().slice(0, 10)
+    }
+    fetchTidesRange(selectedId, begin, end).then(r => setRangeEvents(r.hilo)).catch(console.error)
+  }, [selectedId, view, viewDate])
+
   // Load year summary for year view
   useEffect(() => {
     if (!selectedId || view !== 'year') return
-    fetchYearSummary(selectedId, year).then(s => {
+    const yr = new Date(viewDate + 'T12:00:00').getFullYear()
+    fetchYearSummary(selectedId, yr).then(s => {
       setMonthlyHigh(s.monthly_mean_high)
       setMonthlyLow(s.monthly_mean_low)
     }).catch(console.error)
-  }, [selectedId, year, view])
+  }, [selectedId, view, viewDate])
+
+  // Load solar day for day/night shading (day view only)
+  useEffect(() => {
+    if (view !== 'day') return
+    fetchSolarDay(lat, lon, viewDate).then(setSolar).catch(() => setSolar(null))
+  }, [lat, lon, viewDate, view])
 
   // Load special events for feed
   useEffect(() => {
@@ -177,14 +205,23 @@ export default function Dashboard() {
       <DateNav
         date={viewDate}
         isToday={viewDate === todayStr()}
+        view={view}
+        showDayNight={showDayNight}
+        onToggleDayNight={() => setShowDayNight(v => !v)}
         onPrev={() => {
           const d = new Date(viewDate + 'T12:00:00')
-          d.setDate(d.getDate() - 1)
+          if (view === 'week')       d.setDate(d.getDate() - 7)
+          else if (view === 'month') d.setMonth(d.getMonth() - 1)
+          else if (view === 'year')  d.setFullYear(d.getFullYear() - 1)
+          else                       d.setDate(d.getDate() - 1)
           setViewDate(d.toISOString().slice(0, 10))
         }}
         onNext={() => {
           const d = new Date(viewDate + 'T12:00:00')
-          d.setDate(d.getDate() + 1)
+          if (view === 'week')       d.setDate(d.getDate() + 7)
+          else if (view === 'month') d.setMonth(d.getMonth() + 1)
+          else if (view === 'year')  d.setFullYear(d.getFullYear() + 1)
+          else                       d.setDate(d.getDate() + 1)
           setViewDate(d.toISOString().slice(0, 10))
         }}
         onDateChange={setViewDate}
@@ -195,11 +232,14 @@ export default function Dashboard() {
         {/* Tide curve */}
         <TideCurveChart
           curveData={curveData}
-          hiloData={todayEvents}
+          hiloData={view === 'day' ? todayEvents : rangeEvents}
           floodMinor={selectedStation?.flood_minor_ft ?? undefined}
           view={view}
           stationId={selectedId}
-          isToday={viewDate === todayStr()}
+          isToday={viewDate === todayStr() && view === 'day'}
+          showDayNight={showDayNight}
+          sunrise={solar?.sunrise ?? null}
+          sunset={solar?.sunset ?? null}
           monthlyMeanHigh={monthlyHigh}
           monthlyMeanLow={monthlyLow}
         />

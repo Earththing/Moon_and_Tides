@@ -1,5 +1,6 @@
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -7,6 +8,61 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 app = FastAPI(title="Tideline", version="0.1.0")
+
+
+@app.get("/api/v1/solar-day")
+def solar_day(
+    lat: float = Query(...),
+    lon: float = Query(...),
+    date: str = Query(...),  # YYYY-MM-DD in local time
+):
+    """Return sunrise/sunset in the station's local timezone."""
+    import ephem
+    from timezonefinder import TimezoneFinder
+    from app.tide_data import to_12h
+
+    tf = TimezoneFinder()
+    tz_name = tf.timezone_at(lat=lat, lng=lon) or "UTC"
+    tz = ZoneInfo(tz_name)
+
+    obs = ephem.Observer()
+    obs.lat = str(lat)
+    obs.lon = str(lon)
+    obs.horizon = "-0:34"
+    obs.date = date  # ephem parses YYYY-MM-DD as UTC date
+
+    sun = ephem.Sun()
+    try:
+        sunrise_utc = obs.next_rising(sun).datetime()
+        obs.date = date  # reset — next_rising mutates obs.date as a side effect
+        sunset_utc = obs.next_setting(sun).datetime()
+    except ephem.AlwaysUpError:
+        return {"sunrise": None, "sunset": None, "sunrise_12h": None, "sunset_12h": None, "daylight_hours": 24.0}
+    except ephem.NeverUpError:
+        return {"sunrise": None, "sunset": None, "sunrise_12h": None, "sunset_12h": None, "daylight_hours": 0.0}
+
+    # Convert UTC datetimes to local time
+    sr = sunrise_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+    ss = sunset_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+
+    sunrise_str = sr.strftime("%H:%M")
+    sunset_str  = ss.strftime("%H:%M")
+    # Compute from local times to avoid UTC day-boundary issues
+    sr_mins = sr.hour * 60 + sr.minute
+    ss_mins = ss.hour * 60 + ss.minute
+    daylight_mins = ss_mins - sr_mins
+    if daylight_mins < 0:  # sunset after midnight (polar edge case)
+        daylight_mins += 1440
+    daylight_h = daylight_mins / 60
+
+    return {
+        "sunrise":      sunrise_str,
+        "sunset":       sunset_str,
+        "sunrise_12h":  to_12h(sunrise_str),
+        "sunset_12h":   to_12h(sunset_str),
+        "daylight_hours": round(daylight_h, 2),
+        "timezone":     tz_name,
+    }
 
 
 class GeocodeRequest(BaseModel):

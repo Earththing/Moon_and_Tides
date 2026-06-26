@@ -95,6 +95,27 @@ export async function fetchSpecialEvents(stationId: string, year: number, lat?: 
   return res.json()
 }
 
+export async function fetchTidesRange(stationId: string, begin: string, end: string): Promise<{ hilo: TideEvent[] }> {
+  const res = await fetch(`/api/v1/tides/range?station_id=${stationId}&begin=${begin}&end=${end}`)
+  if (!res.ok) throw new Error('Tides range fetch failed')
+  return res.json()
+}
+
+export interface SolarDay {
+  sunrise: string | null      // HH:MM local
+  sunset: string | null       // HH:MM local
+  sunrise_12h: string | null
+  sunset_12h: string | null
+  daylight_hours: number
+  timezone: string
+}
+
+export async function fetchSolarDay(lat: number, lon: number, date: string): Promise<SolarDay> {
+  const res = await fetch(`/api/v1/solar-day?lat=${lat}&lon=${lon}&date=${date}`)
+  if (!res.ok) throw new Error('Solar day fetch failed')
+  return res.json()
+}
+
 export function icsUrl(lat: number, lon: number, year: number, options = 'hilo,alerts'): string {
   return `/calendar/${year}/${lat},${lon}.ics?options=${options}`
 }
