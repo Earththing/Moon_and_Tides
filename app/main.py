@@ -272,6 +272,22 @@ def special_events(
     }
 
 
+@app.get("/api/v1/ics-preview")
+def ics_preview(
+    station_id: str = Query(...),
+    year: int = Query(...),
+    lat: float = Query(None),
+    lon: float = Query(None),
+    options: str = Query("hilo,alerts,perigean,flood"),
+    radius_miles: float = Query(75.0),
+):
+    """Return event counts for an ICS build without generating the file."""
+    from app.ics_builder import build_tidal_ics
+    opts = {o.strip(): True for o in options.split(",")}
+    _, counts = build_tidal_ics(station_id, year, opts, lat=lat, lon=lon, radius_miles=radius_miles)
+    return {"counts": counts, "total": sum(counts.values())}
+
+
 @app.get("/calendar/{year}/{lat_lon}.ics")
 def calendar_ics(year: int, lat_lon: str, options: str = Query("hilo")):
     try:
@@ -288,7 +304,7 @@ def calendar_ics(year: int, lat_lon: str, options: str = Query("hilo")):
 
     station_id = stations[0]["id"]
     opts = {o: True for o in options.split(",")}
-    ics_bytes = build_tidal_ics(station_id, year, opts)
+    ics_bytes, _ = build_tidal_ics(station_id, year, opts, lat=lat, lon=lon)
 
     return StreamingResponse(
         iter([ics_bytes]),
@@ -312,7 +328,7 @@ def calendar_alerts_ics(year: int, lat_lon: str):
         raise HTTPException(status_code=404, detail="No stations found")
 
     station_id = stations[0]["id"]
-    ics_bytes = build_alerts_only_ics(station_id, year)
+    ics_bytes, _ = build_alerts_only_ics(station_id, year, lat=lat, lon=lon)
 
     return StreamingResponse(
         iter([ics_bytes]),

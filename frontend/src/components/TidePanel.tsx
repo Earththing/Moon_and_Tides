@@ -61,7 +61,10 @@ export default function TidePanel({
       />
 
       <div className="pt-2">
-        <DownloadButton lat={lat} lon={lon} year={year} options={options} />
+        <DownloadButton
+          stationId={station?.id ?? ''}
+          lat={lat} lon={lon} year={year} options={options}
+        />
       </div>
     </div>
   )

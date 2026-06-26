@@ -51,10 +51,19 @@ def clear_cache(tmp_path, monkeypatch):
 def test_ics_parses():
     from icalendar import Calendar
     with patch("httpx.get", side_effect=_httpx_side_effect):
-        ics = build_tidal_ics("9414290", 2026)
+        ics, counts = build_tidal_ics("9414290", 2026)
     cal = Calendar.from_ical(ics)
     events = [c for c in cal.walk() if c.name == "VEVENT"]
     assert len(events) > 600
+
+
+def test_ics_returns_counts():
+    with patch("httpx.get", side_effect=_httpx_side_effect):
+        _, counts = build_tidal_ics("9414290", 2026)
+    assert "hilo_high" in counts
+    assert "hilo_low" in counts
+    assert counts["hilo_high"] > 0
+    assert counts["hilo_low"] > 0
 
 
 def test_ics_uids_stable():
@@ -64,22 +73,22 @@ def test_ics_uids_stable():
         return {c["UID"] for c in Calendar.from_ical(ics).walk() if c.name == "VEVENT"}
 
     with patch("httpx.get", side_effect=_httpx_side_effect):
-        ics1 = build_tidal_ics("9414290", 2026)
-        ics2 = build_tidal_ics("9414290", 2026)
+        ics1, _ = build_tidal_ics("9414290", 2026)
+        ics2, _ = build_tidal_ics("9414290", 2026)
     assert uids(ics1) == uids(ics2)
 
 
 def test_ics_uids_unique():
     from icalendar import Calendar
     with patch("httpx.get", side_effect=_httpx_side_effect):
-        ics = build_tidal_ics("9414290", 2026)
+        ics, _ = build_tidal_ics("9414290", 2026)
     uids = [c["UID"] for c in Calendar.from_ical(ics).walk() if c.name == "VEVENT"]
     assert len(uids) == len(set(uids))
 
 
 def test_ics_crlf():
     with patch("httpx.get", side_effect=_httpx_side_effect):
-        ics = build_tidal_ics("9414290", 2026)
+        ics, _ = build_tidal_ics("9414290", 2026)
     assert b"\r\n" in ics
     assert b"\n\n" not in ics
 
@@ -87,8 +96,9 @@ def test_ics_crlf():
 def test_alerts_only_ics_parses():
     from icalendar import Calendar
     with patch("httpx.get", side_effect=_httpx_side_effect):
-        ics = build_alerts_only_ics("9414290", 2026)
+        ics, counts = build_alerts_only_ics("9414290", 2026)
     cal = Calendar.from_ical(ics)
     events = [c for c in cal.walk() if c.name == "VEVENT"]
-    # With uniform mock data (no extremes standing out), may have few alerts
     assert isinstance(events, list)
+    # counts should be a dict (may be empty if mock data has no extremes)
+    assert isinstance(counts, dict)

@@ -231,14 +231,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return _text(risks)
 
     elif name == "get_slack_water":
-        # Requires curve data; return placeholder
-        return _text({"message": "Slack water computation requires Phase 4 special_events module."})
+        from app.special_events import get_slack_water
+        date_str = datetime.strptime(arguments["date"], "%Y-%m-%d").strftime("%Y-%m-%d")
+        return _text(get_slack_water(arguments["station_id"], date_str))
 
     elif name == "get_tidepooling_windows":
-        return _text({"message": "Tidepooling windows implemented in Phase 4."})
+        from app.special_events import get_tidepooling_windows
+        return _text(get_tidepooling_windows(
+            arguments["station_id"],
+            arguments["begin_date"],
+            arguments["end_date"],
+            arguments["lat"],
+            arguments["lon"],
+        ))
 
     elif name == "get_perigean_spring_tides":
-        return _text({"message": "Perigean spring tides implemented in Phase 4."})
+        from app.special_events import get_perigean_spring_tides
+        return _text(get_perigean_spring_tides(arguments["year"]))
 
     elif name == "generate_ics_url":
         lat = arguments["lat"]

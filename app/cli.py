@@ -93,27 +93,63 @@ def cmd_stations(args):
         print(f"{s['id']:<10} {s['name']:<30} {s['distance_miles']:.1f}    {h}")
 
 
+def _print_counts(counts: dict) -> None:
+    LABELS = {
+        "hilo_high":    "🌊 High tides",
+        "hilo_low":     "🏖 Low tides",
+        "king_tide":    "⚠️  King tides",
+        "extreme_low":  "⚠️  Extreme lows",
+        "perigean":     "🌕 Perigean spring tides",
+        "flood_risk":   "🚨 Flood risk days",
+        "tidepooling":  "🦀 Tidepooling windows",
+        "slack_water":  "⚓ Slack water events",
+        "radius_alert": "🌊 Nearby radius alerts",
+    }
+    print("\nEvents included:")
+    for key, label in LABELS.items():
+        n = counts.get(key, 0)
+        if n:
+            print(f"  {label:<32} {n:>4}")
+    print(f"  {'Total':<32} {sum(counts.values()):>4}")
+
+
 def cmd_ics(args):
     station_id = _resolve_station(args)
     year = getattr(args, "year", None) or datetime.now().year
     out = getattr(args, "out", None)
     alerts_only = getattr(args, "alerts_only", False)
+    radius = getattr(args, "radius", 0.0) or 0.0
+
+    # Resolve lat/lon for features that need them
+    lat, lon = None, None
+    if hasattr(args, "lat") and args.lat is not None:
+        lat, lon = args.lat, args.lon
+    elif getattr(args, "location", None):
+        from app.geocode import geocode_address
+        geo = geocode_address(args.location)
+        if geo:
+            lat, lon = geo[0]["lat"], geo[0]["lon"]
 
     from app.ics_builder import build_tidal_ics, build_alerts_only_ics
     if alerts_only:
-        ics_bytes = build_alerts_only_ics(station_id, year)
+        ics_bytes, counts = build_alerts_only_ics(station_id, year, lat=lat, lon=lon)
     else:
-        ics_bytes = build_tidal_ics(station_id, year)
+        options = {
+            "hilo":       True,
+            "alerts":     True,
+            "perigean":   True,
+            "flood":      True,
+            "tidepooling": lat is not None,
+            "slack":      False,  # requires curve data per day; slow
+            "radius":     radius > 10 and lat is not None,
+        }
+        ics_bytes, counts = build_tidal_ics(station_id, year, options=options, lat=lat, lon=lon, radius_miles=radius)
 
-    if out:
-        with open(out, "wb") as f:
-            f.write(ics_bytes)
-        print(f"Saved {len(ics_bytes):,} bytes to {out}")
-    else:
-        fname = f"tides_{station_id}_{year}.ics"
-        with open(fname, "wb") as f:
-            f.write(ics_bytes)
-        print(f"Saved {len(ics_bytes):,} bytes to {fname}")
+    fname = out or f"tides_{station_id}_{year}.ics"
+    with open(fname, "wb") as f:
+        f.write(ics_bytes)
+    print(f"Saved {len(ics_bytes):,} bytes to {fname}")
+    _print_counts(counts)
 
 
 def cmd_extremes(args):

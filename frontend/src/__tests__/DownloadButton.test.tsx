@@ -6,6 +6,7 @@ describe('DownloadButton', () => {
   it('constructs correct ICS URL from station, year, options', () => {
     render(
       <DownloadButton
+        stationId="9414290"
         lat={37.7749}
         lon={-122.4194}
         year={2026}
