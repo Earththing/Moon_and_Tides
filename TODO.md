@@ -1,33 +1,11 @@
 # Tideline — Remaining Work
 
-Pick up from here. All phases 1–4 are complete and tested (44 Python tests, 21 TS tests).
-Phase 5 frontend is largely complete. Below is what's still open.
+Pick up from here. All phases 1–5 are complete and tested (50 Python tests, 41 TS tests),
+including the interactive Map page. Below is what's still open.
 
 ---
 
 ## High priority
-
-### Map page (`/map` route)
-Currently a stub: "Map view coming in a future update."
-
-The spec requires a full interactive map:
-- React-Leaflet with CartoDB Positron tiles
-- Station markers as circles: size = tidal range, color = current tide state
-  - `#1b7faa` = at/near high, `#5bbfde` = rising, `#2a9e6a` = at/near low,
-    `#88cc88` = falling, `#e8a030` = king tide alert
-- Dashed radius ring centered on user location (`#5bbfde`)
-- Hover tooltip: station name, current height, direction arrow, next tide
-- Click → selects station, highlights in right panel
-- Top-left "Color by" radio: current state / daily range / extremity %
-- Top-right color legend
-- Bottom filter pills: All / Harmonic only / Has flood data / King tide today
-- Right station-list panel with live tide badges and mini sparkline for selected station
-- Footer download button: "Download .ics (N mi radius)"
-
-File to create: `frontend/src/pages/MapPage.tsx` (currently a stub)
-Also needs: `frontend/src/components/CoastalMap.tsx`
-
----
 
 ### Missing frontend tests
 These tests are listed in the spec but not yet written:
@@ -95,7 +73,26 @@ Currently named `"Tides — {station_id} {year}"`. Could use the station name in
 
 ---
 
+### Flood risk rarely fires from predictions alone
+`check_flood_risk` now works (see 2026-07-07 fixes below), but NOAA's derived
+thresholds sit ~1.75 ft above MHHW, so purely astronomical predictions rarely
+cross them (Seattle 2026: 0 days; Charleston 2026: 0 days). Real nuisance
+flooding needs storm surge on top of the prediction. Possible enhancement:
+also flag highs within some margin (e.g. 0.5 ft) of the minor threshold as
+"near flood stage".
+
+---
+
 ## Completed (for reference)
+- 2026-07-07: Map page (`/map`) — CoastalMap (React-Leaflet), color-by modes,
+  filter pills, radius ring, station panel with badges + sparkline, radius ICS
+  download; batch endpoint `GET /api/v1/map/status`
+- 2026-07-07: Fixed tidepooling timezone bug (compared UTC ephem sunrise/sunset
+  to local tide times — returned [] on the West Coast); now uses localized
+  `solar_cache.get_solar_day`
+- 2026-07-07: Fixed flood levels — NOAA response parsed wrong (expected nested
+  'self' dict; it's flat nos_*/nws_* fields) and values are STND-referenced,
+  now converted to MLLW via the station datums endpoint
 - Phase 1: tide_data, station_finder, ics_builder, cli (15 tests)
 - Phase 2: FastAPI all endpoints including solar-day and ics-preview (10 tests)
 - Phase 3: MCP server 13 tools — slack_water, tidepooling, perigean now wired to real Phase 4 code (7 tests)
