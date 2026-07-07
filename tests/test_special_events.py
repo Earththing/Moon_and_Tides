@@ -63,6 +63,10 @@ def test_tidepooling_windows():
         )
 
     assert isinstance(windows, list)
+    # 10:30 local is daylight in SF in July — every day must produce a window.
+    # (Regression guard: a UTC/local timezone bug once made this silently
+    # return [] and the test still passed because it never checked length.)
+    assert len(windows) == 14
     # All windows should have low tide during daylight
     for w in windows:
         assert "date" in w
@@ -70,9 +74,12 @@ def test_tidepooling_windows():
         assert "score" in w
         assert "sunrise" in w
         assert "sunset" in w
+        assert w["sunrise"] <= w["low_tide_time"] <= w["sunset"]
     # Lowest tides should rank highest
-    if len(windows) >= 2:
-        assert windows[0]["score"] >= windows[1]["score"]
+    assert windows[0]["score"] >= windows[1]["score"]
+    # The -0.2 ft days (July 1-5) must outrank the 0.5 ft days
+    top5_dates = {w["date"] for w in windows[:5]}
+    assert top5_dates == {f"2026-07-{d:02d}" for d in range(1, 6)}
 
 
 def test_perigean_spring_tides_2026():

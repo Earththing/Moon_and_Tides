@@ -10,31 +10,6 @@ BORE_OFFSETS = {
 }
 
 
-def _get_solar_day(lat: float, lon: float, date_str: str) -> dict:
-    """Get sunrise/sunset for a given lat/lon and date using ephem."""
-    obs = ephem.Observer()
-    obs.lat = str(lat)
-    obs.lon = str(lon)
-    obs.date = date_str
-    obs.horizon = "-0:34"  # standard refraction
-
-    sun = ephem.Sun()
-    try:
-        sunrise = obs.next_rising(sun).datetime()
-        sunset = obs.next_setting(sun).datetime()
-    except ephem.AlwaysUpError:
-        return {"sunrise": None, "sunset": None, "daylight_hours": 24.0}
-    except ephem.NeverUpError:
-        return {"sunrise": None, "sunset": None, "daylight_hours": 0.0}
-
-    daylight = (sunset - sunrise).total_seconds() / 3600
-    return {
-        "sunrise": sunrise.strftime("%H:%M"),
-        "sunset": sunset.strftime("%H:%M"),
-        "daylight_hours": round(daylight, 2),
-    }
-
-
 def get_slack_water(station_id: str, date: str) -> list[dict]:
     """Find slack water times (inflection points) from 6-minute water level curve."""
     from app.tide_data import get_water_level_curve
@@ -67,6 +42,11 @@ def get_tidepooling_windows(
 ) -> list[dict]:
     """Find days where lowest tide occurs during daylight hours."""
     from app.tide_data import get_hilo_predictions
+    # get_solar_day returns sunrise/sunset in the station's local timezone,
+    # matching NOAA tide times (lst_ldt). Do NOT use raw ephem here — it
+    # returns UTC, which made the daylight comparison always fail on the
+    # US West Coast (sunrise "12:43" / sunset "03:39" for SF in June).
+    from app.solar_cache import get_solar_day
 
     begin_dt = datetime.strptime(begin_date, "%Y%m%d")
     end_dt = datetime.strptime(end_date, "%Y%m%d")
@@ -85,7 +65,7 @@ def get_tidepooling_windows(
         lows = lows_by_date.get(date_str, [])
         if lows:
             lowest = min(lows, key=lambda x: x["height_ft"])
-            solar = _get_solar_day(lat, lon, date_str)
+            solar = get_solar_day(lat, lon, date_str)
 
             if solar["sunrise"] and solar["sunset"]:
                 low_time = lowest["time"]
