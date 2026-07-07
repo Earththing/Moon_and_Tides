@@ -83,7 +83,20 @@ also flag highs within some margin (e.g. 0.5 ft) of the minor threshold as
 
 ---
 
+### Tidepooling gated on harmonic stations
+The spec disables the Tidepooling calendar option for non-harmonic stations,
+but tidepooling only needs hilo + sunrise/sunset — both available for
+subordinate stations (e.g. Edmonds). Consider relaxing the gate to allow
+subordinate stations; slack water should stay harmonic-only (a synthesized
+cosine curve has no real slack information).
+
+---
+
 ## Completed (for reference)
+- 2026-07-07: Subordinate prediction stations — station list switched to
+  mdapi type=tidepredictions (3,498 stations); Edmonds etc. resolve to their
+  own NOAA-corrected predictions; day curve synthesized from hilo (cosine)
+  where NOAA has no 6-min product; map/status parallelized
 - 2026-07-07: Map page (`/map`) — CoastalMap (React-Leaflet), color-by modes,
   filter pills, radius ring, station panel with badges + sparkline, radius ICS
   download; batch endpoint `GET /api/v1/map/status`
