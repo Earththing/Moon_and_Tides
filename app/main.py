@@ -235,6 +235,45 @@ def special_events(
     }
 
 
+@app.get("/api/v1/map/status")
+def map_status(
+    ids: str = Query(..., description="Comma-separated station IDs"),
+    date: str = Query(...),  # YYYY-MM-DD
+    extremes: bool = Query(False),
+    flood: bool = Query(False),
+):
+    """Batch status for map markers: today's hilo per station, plus optional
+    king-tide thresholds and flood-data availability. One round-trip for N
+    stations instead of N requests; failures are skipped per-station."""
+    from app.tide_data import get_hilo_predictions
+    from app.alert_engine import compute_extreme_thresholds, _get_flood_levels
+
+    station_ids = [s.strip() for s in ids.split(",") if s.strip()][:60]
+    d = datetime.strptime(date, "%Y-%m-%d").strftime("%Y%m%d")
+
+    result: dict[str, dict] = {}
+    for sid in station_ids:
+        entry: dict = {}
+        try:
+            entry["hilo"] = get_hilo_predictions(sid, d, d)
+        except Exception:
+            continue  # no tide data — omit station entirely
+        if extremes:
+            try:
+                th = compute_extreme_thresholds(sid)
+                entry["high_threshold_ft"] = th["high_threshold_ft"]
+                entry["low_threshold_ft"] = th["low_threshold_ft"]
+            except Exception:
+                pass
+        if flood:
+            try:
+                entry["has_flood"] = _get_flood_levels(sid) is not None
+            except Exception:
+                entry["has_flood"] = False
+        result[sid] = entry
+    return {"stations": result}
+
+
 @app.get("/api/v1/ics-preview")
 def ics_preview(
     station_id: str = Query(...),
@@ -252,7 +291,12 @@ def ics_preview(
 
 
 @app.get("/calendar/{year}/{lat_lon}.ics")
-def calendar_ics(year: int, lat_lon: str, options: str = Query("hilo")):
+def calendar_ics(
+    year: int,
+    lat_lon: str,
+    options: str = Query("hilo"),
+    radius_miles: float = Query(75.0),
+):
     try:
         lat_str, lon_str = lat_lon.split(",")
         lat, lon = float(lat_str), float(lon_str)
@@ -267,7 +311,9 @@ def calendar_ics(year: int, lat_lon: str, options: str = Query("hilo")):
 
     station_id = stations[0]["id"]
     opts = {o: True for o in options.split(",")}
-    ics_bytes, _ = build_tidal_ics(station_id, year, opts, lat=lat, lon=lon)
+    ics_bytes, _ = build_tidal_ics(
+        station_id, year, opts, lat=lat, lon=lon, radius_miles=radius_miles
+    )
 
     return StreamingResponse(
         iter([ics_bytes]),

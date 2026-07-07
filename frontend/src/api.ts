@@ -69,6 +69,31 @@ export async function fetchNearestStations(lat: number, lon: number, count = 5):
   return res.json()
 }
 
+export async function fetchStationsRadius(lat: number, lon: number, radiusMiles: number): Promise<Station[]> {
+  const res = await fetch(`/api/v1/stations/radius?lat=${lat}&lon=${lon}&radius_miles=${radiusMiles}`)
+  if (!res.ok) throw new Error('Radius stations fetch failed')
+  return res.json()
+}
+
+export interface MapStationStatus {
+  hilo: TideEvent[]
+  high_threshold_ft?: number
+  low_threshold_ft?: number
+  has_flood?: boolean
+}
+
+export async function fetchMapStatus(
+  ids: string[], date: string, opts: { extremes?: boolean; flood?: boolean } = {}
+): Promise<Record<string, MapStationStatus>> {
+  const params = new URLSearchParams({ ids: ids.join(','), date })
+  if (opts.extremes) params.set('extremes', 'true')
+  if (opts.flood) params.set('flood', 'true')
+  const res = await fetch(`/api/v1/map/status?${params}`)
+  if (!res.ok) throw new Error('Map status fetch failed')
+  const data = await res.json()
+  return data.stations
+}
+
 export async function fetchStation(id: string): Promise<Station> {
   const res = await fetch(`/api/v1/station/${id}`)
   if (!res.ok) throw new Error('Station fetch failed')
@@ -124,6 +149,8 @@ export async function fetchSolarRange(
   return res.json()
 }
 
-export function icsUrl(lat: number, lon: number, year: number, options = 'hilo,alerts'): string {
-  return `/calendar/${year}/${lat},${lon}.ics?options=${options}`
+export function icsUrl(lat: number, lon: number, year: number, options = 'hilo,alerts', radiusMiles?: number): string {
+  let url = `/calendar/${year}/${lat},${lon}.ics?options=${options}`
+  if (radiusMiles !== undefined) url += `&radius_miles=${radiusMiles}`
+  return url
 }

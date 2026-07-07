@@ -6,7 +6,7 @@ import {
   type Station, type TideEvent, type CurvePoint, type SolarDay,
 } from '../api'
 import type { CalOptions } from '../types'
-import { saveStation } from '../station-store'
+import { saveStation, saveLocation, loadLocation } from '../station-store'
 import NavBar from '../components/NavBar'
 import TopBar from '../components/TopBar'
 import DateNav from '../components/DateNav'
@@ -29,9 +29,9 @@ export default function Dashboard() {
   const { stationId: paramStation, year: paramYear } = useParams<{ stationId?: string; year?: string }>()
   const navigate = useNavigate()
 
-  const [lat, setLat] = useState(DEFAULT_LAT)
-  const [lon, setLon] = useState(DEFAULT_LON)
-  const [searchedLocation, setSearchedLocation] = useState('')
+  const [lat, setLat] = useState(() => loadLocation()?.lat ?? DEFAULT_LAT)
+  const [lon, setLon] = useState(() => loadLocation()?.lon ?? DEFAULT_LON)
+  const [searchedLocation, setSearchedLocation] = useState(() => loadLocation()?.name ?? '')
   const [stations, setStations] = useState<Station[]>([])
   const [selectedId, setSelectedId] = useState(paramStation ?? '')
   const [selectedStation, setSelectedStation] = useState<Station | null>(null)
@@ -204,7 +204,9 @@ export default function Dashboard() {
               setLat(r.lat)
               setLon(r.lon)
               // Store first two parts of display name, e.g. "Edmonds, Snohomish County"
-              setSearchedLocation(r.display_name.split(',').slice(0, 2).join(',').trim())
+              const name = r.display_name.split(',').slice(0, 2).join(',').trim()
+              setSearchedLocation(name)
+              saveLocation(r.lat, r.lon, name) // Map page centers on last search
             }}
             placeholder="Search city or address…"
           />

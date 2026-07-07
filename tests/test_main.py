@@ -118,6 +118,44 @@ def test_special_events():
     assert "flood_risk" in data
 
 
+def test_map_status_batch():
+    with patch("app.tide_data.get_hilo_predictions", return_value=MOCK_HILO):
+        resp = client.get("/api/v1/map/status?ids=9414290,9414750&date=2026-06-21")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "stations" in data
+    assert set(data["stations"].keys()) == {"9414290", "9414750"}
+    for entry in data["stations"].values():
+        assert len(entry["hilo"]) == 4
+        # extremes/flood not requested — must not be present
+        assert "high_threshold_ft" not in entry
+        assert "has_flood" not in entry
+
+
+def test_map_status_with_extremes():
+    with patch("app.tide_data.get_hilo_predictions", return_value=MOCK_HILO):
+        with patch("app.alert_engine.compute_extreme_thresholds",
+                   return_value={"high_threshold_ft": 6.1, "low_threshold_ft": -0.5}):
+            resp = client.get("/api/v1/map/status?ids=9414290&date=2026-06-21&extremes=true")
+    assert resp.status_code == 200
+    entry = resp.json()["stations"]["9414290"]
+    assert entry["high_threshold_ft"] == 6.1
+    assert entry["low_threshold_ft"] == -0.5
+
+
+def test_map_status_skips_failing_station():
+    def fail_for_bad(station_id, *a, **kw):
+        if station_id == "0000000":
+            raise ValueError("no data")
+        return MOCK_HILO
+    with patch("app.tide_data.get_hilo_predictions", side_effect=fail_for_bad):
+        resp = client.get("/api/v1/map/status?ids=9414290,0000000&date=2026-06-21")
+    assert resp.status_code == 200
+    data = resp.json()["stations"]
+    assert "9414290" in data
+    assert "0000000" not in data
+
+
 def test_calendar_ics_download():
     def mock_get_all(return_value=MOCK_STATIONS):
         return MOCK_STATIONS
