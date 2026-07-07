@@ -615,7 +615,9 @@ Sections in order, each separated by a labeled divider:
 
 2. **Calendar options** — checkboxes
    - Cannot uncheck: High & low tides
-   - Disabled + tooltip when station is non-harmonic: Slack water, Tidepooling
+   - Disabled + tooltip when station is non-harmonic: Slack water
+     (Tidepooling stays enabled — it needs only hilo + sunrise/sunset,
+     which subordinate stations also have)
    - Disabled + tooltip when no NOAA flood data: Flood risk
    - Disabled when radius ≤ 10 mi: Radius alerts
    - Greyed text + cursor-not-allowed on disabled items
@@ -728,7 +730,7 @@ const radiusActive = radiusMiles > 10
 
 // Disabled (greyed, cursor-not-allowed, tooltip on hover):
 // slack water:    !isHarmonic  → "Requires a harmonic station"
-// tidepooling:    !isHarmonic  → "Requires a harmonic station"
+// tidepooling:    never harmonic-gated (needs only hilo + sunrise/sunset)
 // flood risk:     !hasFloodData → "No NOAA flood thresholds for this station"
 // radius alerts:  !radiusActive → "Set alert radius above 10 miles"
 

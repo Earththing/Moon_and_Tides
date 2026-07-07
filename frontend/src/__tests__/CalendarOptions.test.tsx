@@ -24,6 +24,24 @@ describe('CalendarOptions', () => {
     expect(input).toBeDisabled()
   })
 
+  it('tidepooling enabled even when station is non-harmonic', () => {
+    // Tidepooling only needs hilo + sunrise/sunset — subordinate (non-harmonic)
+    // stations like Edmonds have both, so it must not be harmonic-gated.
+    const onChange = vi.fn()
+    render(
+      <CalendarOptions
+        options={DEFAULT_OPTIONS}
+        onChange={onChange}
+        isHarmonic={false}
+        hasFloodData={false}
+        radiusActive={false}
+      />
+    )
+    const label = screen.getByText('Tidepooling windows').closest('label')!
+    const input = label.querySelector('input')!
+    expect(input).not.toBeDisabled()
+  })
+
   it('flood risk disabled when station has no flood data', () => {
     render(
       <CalendarOptions

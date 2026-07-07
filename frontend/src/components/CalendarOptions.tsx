@@ -21,7 +21,9 @@ const ITEMS: Item[] = [
   { key: 'alerts', label: 'King tide alerts' },
   { key: 'perigean', label: 'Perigean spring tides' },
   { key: 'slack', label: 'Slack water', disabledWhen: true, disabledTip: 'Requires a harmonic station' },
-  { key: 'tidepooling', label: 'Tidepooling windows', disabledWhen: true, disabledTip: 'Requires a harmonic station' },
+  // Tidepooling needs only hilo + sunrise/sunset, which subordinate (non-harmonic)
+  // stations also have — so unlike slack water it is never harmonic-gated.
+  { key: 'tidepooling', label: 'Tidepooling windows' },
   { key: 'flood', label: 'Flood risk', disabledWhen: true, disabledTip: 'No NOAA flood thresholds for this station' },
   { key: 'radius', label: 'Radius alerts', disabledWhen: true, disabledTip: 'Set alert radius above 10 miles' },
 ]
@@ -29,17 +31,14 @@ const ITEMS: Item[] = [
 export default function CalendarOptions({ options, onChange, isHarmonic, hasFloodData, radiusActive }: Props) {
   function isDisabled(item: Item): boolean {
     if (item.locked) return false
-    if ((item.key === 'slack' || item.key === 'tidepooling') && !isHarmonic) return true
+    if (item.key === 'slack' && !isHarmonic) return true
     if (item.key === 'flood' && !hasFloodData) return true
     if (item.key === 'radius' && !radiusActive) return true
     return false
   }
 
   function tipFor(item: Item): string | undefined {
-    if ((item.key === 'slack' || item.key === 'tidepooling') && !isHarmonic) return item.disabledTip
-    if (item.key === 'flood' && !hasFloodData) return item.disabledTip
-    if (item.key === 'radius' && !radiusActive) return item.disabledTip
-    return undefined
+    return isDisabled(item) ? item.disabledTip : undefined
   }
 
   return (
