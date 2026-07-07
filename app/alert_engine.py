@@ -10,7 +10,28 @@ NOAA_MDAPI = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi"
 APP_HEADER = "moon_and_tides/0.1"
 
 
+def _get_mllw_offset(station_id: str) -> float | None:
+    """MLLW height above station datum (STND), in feet, from the datums endpoint."""
+    url = f"{NOAA_MDAPI}/stations/{station_id}/datums.json"
+    try:
+        resp = httpx.get(url, params={"application": APP_HEADER, "units": "english"}, timeout=15)
+        resp.raise_for_status()
+        for d in resp.json().get("datums", []):
+            if d.get("name") == "MLLW" and d.get("value") is not None:
+                return float(d["value"])
+    except Exception:
+        pass
+    return None
+
+
 def _get_flood_levels(station_id: str) -> dict | None:
+    """Flood thresholds in feet above MLLW (matching prediction heights), or None.
+
+    Cached in the flood_levels table. The NOAA floodlevels response is a flat
+    object with nos_minor/nos_moderate/nos_major (nws_* as fallback) referenced
+    to station datum (STND) — NOT MLLW — so we subtract the station's MLLW
+    datum offset before caching.
+    """
     with _db_conn() as conn:
         row = conn.execute(
             "SELECT minor_ft, moderate_ft, major_ft FROM flood_levels WHERE station_id=?",
@@ -27,15 +48,23 @@ def _get_flood_levels(station_id: str) -> dict | None:
     except Exception:
         return None
 
-    # NOAA floodlevels response nests data under "self" key
-    fl = body.get("self")
-    if not isinstance(fl, dict):
-        return None
-    minor = fl.get("minor")
-    moderate = fl.get("moderate")
-    major = fl.get("major")
+    def _level(name: str) -> float | None:
+        v = body.get(f"nos_{name}")
+        return v if v is not None else body.get(f"nws_{name}")
+
+    minor = _level("minor")
+    moderate = _level("moderate")
+    major = _level("major")
     if minor is None:
         return None
+
+    offset = _get_mllw_offset(station_id)
+    if offset is None:
+        return None  # can't express thresholds in MLLW — safer to report no data
+
+    minor = round(minor - offset, 2)
+    moderate = round(moderate - offset, 2) if moderate is not None else None
+    major = round(major - offset, 2) if major is not None else None
 
     with _db_conn() as conn:
         conn.execute(

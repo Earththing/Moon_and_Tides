@@ -83,6 +83,63 @@ def test_check_flood_risk_no_thresholds():
     assert results == []
 
 
+def test_flood_levels_parsed_flat_and_converted_to_mllw():
+    """NOAA floodlevels is a flat object (nos_*/nws_*) referenced to STND;
+    values must be converted to MLLW using the station's datum offset.
+    Regression: parsing once expected a nested dict under 'self' (a URL string
+    in reality), which made flood detection silently return no data."""
+    from app.alert_engine import _get_flood_levels
+
+    def fake_get(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        if "floodlevels" in url:
+            # Real Seattle (9447130) response shape
+            resp.json.return_value = {
+                "nos_minor": 21.39, "nos_moderate": 22.26, "nos_major": 23.59,
+                "nws_minor": 21.40, "nws_moderate": 22.30, "nws_major": 22.70,
+                "action": None,
+                "self": "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/9447130/floodlevels.json",
+            }
+        else:  # datums
+            resp.json.return_value = {"datums": [
+                {"name": "STND", "value": 0.0},
+                {"name": "MLLW", "value": 7.94},
+                {"name": "MHHW", "value": 19.3},
+            ]}
+        return resp
+
+    with patch("app.alert_engine.httpx.get", side_effect=fake_get):
+        levels = _get_flood_levels("9447130")
+
+    assert levels is not None
+    # 21.39 STND - 7.94 MLLW offset = 13.45 ft MLLW (matches NWS Seattle minor stage)
+    assert levels["minor_ft"] == pytest.approx(13.45)
+    assert levels["moderate_ft"] == pytest.approx(14.32)
+    assert levels["major_ft"] == pytest.approx(15.65)
+
+
+def test_flood_levels_nws_fallback():
+    from app.alert_engine import _get_flood_levels
+
+    def fake_get(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        if "floodlevels" in url:
+            resp.json.return_value = {
+                "nos_minor": None, "nos_moderate": None, "nos_major": None,
+                "nws_minor": 10.0, "nws_moderate": None, "nws_major": None,
+            }
+        else:
+            resp.json.return_value = {"datums": [{"name": "MLLW", "value": 4.0}]}
+        return resp
+
+    with patch("app.alert_engine.httpx.get", side_effect=fake_get):
+        levels = _get_flood_levels("1234567")
+
+    assert levels == {"minor_ft": 6.0, "moderate_ft": None, "major_ft": None}
+
+
 def test_check_flood_risk_with_thresholds(tmp_path, monkeypatch):
     # The autouse clear_cache fixture already set CACHE_DB to tmp_path/tides.db
     # We use the same path so flood data and get_hilo both share the DB
