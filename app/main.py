@@ -245,19 +245,19 @@ def map_status(
     """Batch status for map markers: today's hilo per station, plus optional
     king-tide thresholds and flood-data availability. One round-trip for N
     stations instead of N requests; failures are skipped per-station."""
+    from concurrent.futures import ThreadPoolExecutor
     from app.tide_data import get_hilo_predictions
     from app.alert_engine import compute_extreme_thresholds, _get_flood_levels
 
     station_ids = [s.strip() for s in ids.split(",") if s.strip()][:60]
     d = datetime.strptime(date, "%Y-%m-%d").strftime("%Y%m%d")
 
-    result: dict[str, dict] = {}
-    for sid in station_ids:
+    def fetch_one(sid: str) -> tuple[str, dict] | None:
         entry: dict = {}
         try:
             entry["hilo"] = get_hilo_predictions(sid, d, d)
         except Exception:
-            continue  # no tide data — omit station entirely
+            return None  # no tide data — omit station entirely
         if extremes:
             try:
                 th = compute_extreme_thresholds(sid)
@@ -270,7 +270,12 @@ def map_status(
                 entry["has_flood"] = _get_flood_levels(sid) is not None
             except Exception:
                 entry["has_flood"] = False
-        result[sid] = entry
+        return sid, entry
+
+    # Parallel: on a cold cache each station is one or more NOAA calls
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        fetched = pool.map(fetch_one, station_ids)
+    result: dict[str, dict] = {sid: entry for pair in fetched if pair for sid, entry in [pair]}
     return {"stations": result}
 
 

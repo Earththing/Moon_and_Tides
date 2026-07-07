@@ -77,3 +77,51 @@ def test_height_values_plausible():
     highs = [d["height_ft"] for d in data if d["type"] == "H"]
     lows = [d["height_ft"] for d in data if d["type"] == "L"]
     assert min(lows) > -2.0 and max(highs) < 8.0
+
+
+def test_synthesized_curve_for_subordinate_station():
+    """Subordinate stations (no 6-min NOAA product) get a cosine curve
+    synthesized from their own corrected hilo predictions."""
+    from app.tide_data import get_water_level_curve
+
+    with patch("app.station_finder.is_subordinate_station", return_value=True):
+        with patch("httpx.get", return_value=_make_mock_response(MOCK_HILO_RESPONSE)):
+            curve = get_water_level_curve("9447427", "20260115")
+
+    assert len(curve) == 240  # 6-minute intervals over 24 hours
+    assert all(r["date"] == "2026-01-15" for r in curve)
+    assert all(r.get("synthetic") is True for r in curve)
+
+    # Heights stay within the hilo envelope
+    heights = [r["height_ft"] for r in curve]
+    assert min(heights) >= 0.8 - 0.01
+    assert max(heights) <= 5.2 + 0.01
+
+    # Curve passes through the extremes at (rounded) event times
+    by_time = {r["time"]: r["height_ft"] for r in curve}
+    assert by_time["09:30"] == pytest.approx(0.8, abs=0.01)  # L
+    assert by_time["21:00"] == pytest.approx(1.1, abs=0.01)  # L
+
+    # Monotone rising between the 09:30 low and 15:45 high
+    rising = [r["height_ft"] for r in curve if "10:00" <= r["time"] <= "15:30"]
+    assert rising == sorted(rising)
+
+
+def test_curve_synthesis_fallback_on_noaa_error():
+    """If NOAA answers 'No Predictions data' for the 6-min product (stale
+    station cache), fall back to synthesis instead of raising."""
+    from app.tide_data import get_water_level_curve
+
+    def fake_get(url, params=None, **kwargs):
+        if params and params.get("interval") == "6":
+            return _make_mock_response(
+                {"error": {"message": "No Predictions data was found. Please make sure the Datum input is valid."}}
+            )
+        return _make_mock_response(MOCK_HILO_RESPONSE)
+
+    with patch("app.station_finder.is_subordinate_station", return_value=False):
+        with patch("httpx.get", side_effect=fake_get):
+            curve = get_water_level_curve("9447427", "20260115")
+
+    assert len(curve) == 240
+    assert all(r.get("synthetic") is True for r in curve)

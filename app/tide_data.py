@@ -14,7 +14,9 @@ CACHE_DAYS_PREDICTIONS_FUTURE = 365   # current/future year — check once a yea
 
 def _db_conn() -> sqlite3.Connection:
     CACHE_DB.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(str(CACHE_DB))
+    # 30s busy timeout: map/status fetches from a thread pool, so brief
+    # concurrent writes to the cache are expected
+    conn = sqlite3.connect(str(CACHE_DB), timeout=30)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS predictions (
             station_id TEXT NOT NULL,
@@ -210,12 +212,63 @@ def get_hilo_predictions(
     return _add_12h(filtered)
 
 
+def synthesize_curve_from_hilo(
+    station_id: str,
+    date: str,
+    datum: str = "MLLW",
+    units: str = "english",
+) -> list[dict]:
+    """Approximate a 6-minute water level curve by cosine interpolation between
+    the station's own high/low predictions. Used for subordinate stations,
+    where NOAA publishes corrected hilo but no 6-minute product. Includes the
+    neighboring days' events so the curve is continuous across midnight."""
+    import math
+
+    dt = datetime.strptime(date, "%Y%m%d")
+    begin = (dt - timedelta(days=1)).strftime("%Y%m%d")
+    end = (dt + timedelta(days=1)).strftime("%Y%m%d")
+    hilo = get_hilo_predictions(station_id, begin, end, datum=datum, units=units)
+
+    events = sorted(
+        (datetime.strptime(f"{r['date']} {r['time']}", "%Y-%m-%d %H:%M"), r["height_ft"])
+        for r in hilo
+    )
+    if len(events) < 2:
+        return []
+
+    records = []
+    t = dt
+    day_end = dt + timedelta(days=1)
+    i = 0  # index of the first event at/after t, advanced monotonically
+    while t < day_end:
+        while i < len(events) and events[i][0] <= t:
+            i += 1
+        if i == 0:
+            height = events[0][1]           # before first known event: clamp
+        elif i == len(events):
+            height = events[-1][1]          # after last known event: clamp
+        else:
+            (t1, h1), (t2, h2) = events[i - 1], events[i]
+            u = (t - t1).total_seconds() / (t2 - t1).total_seconds()
+            height = h1 + (h2 - h1) * (1 - math.cos(math.pi * u)) / 2
+        records.append({
+            "date": t.strftime("%Y-%m-%d"),
+            "time": t.strftime("%H:%M"),
+            "height_ft": round(height, 3),
+            "synthetic": True,
+        })
+        t += timedelta(minutes=6)
+    return _add_12h(records)
+
+
 def get_water_level_curve(
     station_id: str,
     date: str,
     datum: str = "MLLW",
     units: str = "english",
 ) -> list[dict]:
+    from app.station_finder import is_subordinate_station
+
     dt = datetime.strptime(date, "%Y%m%d")
     year = dt.year
     cached = _cache_get(station_id, year, "curve", datum, units)
@@ -223,6 +276,11 @@ def get_water_level_curve(
     if cached is not None:
         date_str = dt.strftime("%Y-%m-%d")
         return _add_12h([r for r in cached if r["date"] == date_str])
+
+    # Subordinate stations have no 6-minute product — synthesize from their
+    # NOAA-corrected hilo instead of making a request that will fail.
+    if is_subordinate_station(station_id):
+        return synthesize_curve_from_hilo(station_id, date, datum, units)
 
     params = {
         "product": "predictions",
@@ -240,7 +298,12 @@ def get_water_level_curve(
     resp.raise_for_status()
     body = resp.json()
     if "error" in body:
-        raise ValueError(f"NOAA error: {body['error'].get('message', body['error'])}")
+        msg = str(body["error"].get("message", body["error"]))
+        if "No Predictions data" in msg:
+            # Station has hilo but no 6-minute product (subordinate not yet
+            # flagged in the cached station list) — synthesize instead.
+            return synthesize_curve_from_hilo(station_id, date, datum, units)
+        raise ValueError(f"NOAA error: {msg}")
 
     raw = body.get("predictions", [])
     records = []

@@ -20,7 +20,11 @@ def _get_cached_stations() -> list[dict] | None:
         ).fetchone()
         if rows is None:
             return None
-        _, fetched_at_str = rows
+        json_data, fetched_at_str = rows
+        # Older caches came from the waterlevels list (no station_type key) and
+        # lack the ~2,200 subordinate prediction stations — force a refetch.
+        if "station_type" not in json.loads(json_data):
+            return None
         fetched_at = datetime.fromisoformat(fetched_at_str)
         if datetime.utcnow() - fetched_at > timedelta(days=STATION_CACHE_DAYS):
             return None
@@ -29,12 +33,16 @@ def _get_cached_stations() -> list[dict] | None:
 
 
 def get_all_stations() -> list[dict]:
+    # Uses the tidepredictions station list (~3,500 stations): both reference
+    # stations ("R", harmonic — full 6-min curves) and subordinate stations
+    # ("S" — NOAA-corrected hilo predictions for places like Edmonds, WA that
+    # have no gauge of their own; corrections applied server-side by NOAA).
     cached = _get_cached_stations()
     if cached is not None:
         return cached
 
     url = f"{NOAA_MDAPI}/stations.json"
-    params = {"type": "waterlevels", "application": APP_HEADER}
+    params = {"type": "tidepredictions", "application": APP_HEADER}
     resp = httpx.get(url, params=params, timeout=60)
     resp.raise_for_status()
     body = resp.json()
@@ -44,18 +52,18 @@ def get_all_stations() -> list[dict]:
     with _db_conn() as conn:
         conn.execute("DELETE FROM stations")
         for s in body.get("stations", []):
+            station_type = s.get("type", "R")  # "R" reference | "S" subordinate
             station = {
                 "id": s.get("id", ""),
                 "name": s.get("name", ""),
                 "lat": float(s.get("lat", 0)),
                 "lon": float(s.get("lng", 0)),
                 "state": s.get("state", ""),
-                "tidal": 1 if s.get("tidal") else 0,
-                "harmonic": 1 if s.get("greatlakes") is False and s.get("tidal") else 0,
+                "tidal": 1,  # every tide-prediction station is tidal
+                "harmonic": 1 if station_type == "R" else 0,
+                "station_type": station_type,
+                "reference_id": s.get("reference_id") or None,
             }
-            # harmonic: stations with tidal predictions are harmonic
-            # The NOAA API doesn't directly expose "harmonic" — use tidal flag as proxy
-            station["harmonic"] = station["tidal"]
             stations.append(station)
             conn.execute(
                 "INSERT OR REPLACE INTO stations "
@@ -66,6 +74,17 @@ def get_all_stations() -> list[dict]:
                  json.dumps(station), now)
             )
     return stations
+
+
+def is_subordinate_station(station_id: str) -> bool:
+    """True if the station is a subordinate prediction station (hilo only)."""
+    try:
+        for s in get_all_stations():
+            if s["id"] == station_id:
+                return s.get("station_type") == "S"
+    except Exception:
+        pass
+    return False
 
 
 def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -21,6 +21,8 @@ export interface Station {
   state: string
   tidal: number
   harmonic: number
+  station_type?: 'R' | 'S'   // R = reference (harmonic), S = subordinate (corrected hilo only)
+  reference_id?: string | null
   distance_miles?: number
   tidal_type?: string
   mean_range_ft?: number | null
