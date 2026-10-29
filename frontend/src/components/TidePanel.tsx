@@ -8,8 +8,6 @@ import DownloadButton from './DownloadButton'
 interface Props {
   station: Station | null
   todayEvents: TideEvent[]
-  lat: number
-  lon: number
   year: number
   options: CalOptions
   onOptionsChange: (o: CalOptions) => void
@@ -29,7 +27,7 @@ function Divider({ label }: { label: string }) {
 }
 
 export default function TidePanel({
-  station, todayEvents, lat, lon, year,
+  station, todayEvents, year,
   options, onOptionsChange, radiusMiles, onRadiusChange, radiusStationCount,
 }: Props) {
   const isHarmonic = station?.harmonic === 1
@@ -63,7 +61,7 @@ export default function TidePanel({
       <div className="pt-2">
         <DownloadButton
           stationId={station?.id ?? ''}
-          lat={lat} lon={lon} year={year} options={options}
+          year={year} options={options} radiusMiles={radiusMiles}
         />
       </div>
     </div>

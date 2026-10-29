@@ -11,13 +11,15 @@ def _station_meta(station_id: str, lat: float | None = None,
                   lon: float | None = None) -> tuple[str, ZoneInfo, float | None, float | None]:
     """Return (name, timezone, lat, lon) for a station.
 
-    lat/lon are the station's own coordinates when known, else the caller's."""
+    The timezone is always the station's. lat/lon are the caller's when given
+    (e.g. a radius centered on the user), else the station's own."""
     from app.station_finder import get_station, station_timezone
     s = get_station(station_id)
     name = s["name"] if s else station_id
-    if s:
+    tz = station_timezone(station_id, lat, lon)
+    if s and (lat is None or lon is None):
         lat, lon = s["lat"], s["lon"]
-    return name, station_timezone(station_id, lat, lon), lat, lon
+    return name, tz, lat, lon
 
 
 def _make_uid(station_id: str, date_str: str, time_str: str, tag: str) -> str:
@@ -108,8 +110,8 @@ def build_tidal_ics(
     if options is None:
         options = {"hilo": True}
 
-    # Tidepooling sunrise/sunset and the radius-alert center default to the
-    # station itself, so a station-addressed calendar needs no coordinates.
+    # Without lat/lon, tidepooling sunrise/sunset and the radius-alert center
+    # default to the station itself, so a station calendar needs no coordinates.
     station_name, tz, lat, lon = _station_meta(station_id, lat, lon)
     cal   = _build_calendar(station_id, year, station_name, tz)
     data  = get_hilo_predictions(station_id, f"{year}0101", f"{year}1231")
