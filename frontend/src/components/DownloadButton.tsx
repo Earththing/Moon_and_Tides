@@ -3,10 +3,9 @@ import { icsUrl } from '../api'
 
 interface Props {
   stationId: string
-  lat: number
-  lon: number
   year: number
   options: Record<string, boolean>
+  radiusMiles?: number
 }
 
 interface Counts {
@@ -33,28 +32,31 @@ const LABELS: Record<string, string> = {
   radius_alert: '🌊 Nearby alerts',
 }
 
-export default function DownloadButton({ stationId, lat, lon, year, options }: Props) {
+export default function DownloadButton({ stationId, year, options, radiusMiles }: Props) {
   const [counts, setCounts] = useState<Counts | null>(null)
   const [total, setTotal] = useState<number | null>(null)
   const [open, setOpen] = useState(false)
 
   const optStr = Object.entries(options).filter(([, v]) => v).map(([k]) => k).join(',') || 'hilo'
-  const href = icsUrl(lat, lon, year, optStr)
+  // radius_miles only matters when radius alerts are on; omit it otherwise so
+  // the URL (and the preview) don't change as the slider moves
+  const radius = options.radius ? radiusMiles : undefined
+  const href = icsUrl(stationId, year, optStr, radius)
 
   useEffect(() => {
     if (!stationId) return
+    // No lat/lon: the preview, like the download, is centered on the station
     const params = new URLSearchParams({
       station_id: stationId,
       year: String(year),
-      lat: String(lat),
-      lon: String(lon),
       options: optStr,
     })
+    if (radius !== undefined) params.set('radius_miles', String(radius))
     fetch(`/api/v1/ics-preview?${params}`)
       .then(r => r.json())
       .then(d => { setCounts(d.counts); setTotal(d.total) })
       .catch(() => { setCounts(null); setTotal(null) })
-  }, [stationId, year, lat, lon, optStr])
+  }, [stationId, year, optStr, radius])
 
   return (
     <div className="space-y-1">

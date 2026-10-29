@@ -69,7 +69,8 @@ async def list_tools() -> list[Tool]:
               ["station_id", "begin_date", "end_date"]),
 
         _tool("find_extreme_in_radius",
-              "Find extreme tides at any station within a radius.",
+              "Highest high and lowest low tide at every station within a radius, "
+              "ranked across stations. Dates: YYYY-MM-DD.",
               {
                   "lat": {"type": "number"},
                   "lon": {"type": "number"},
@@ -117,9 +118,16 @@ async def list_tools() -> list[Tool]:
                   "lon": {"type": "number"},
                   "year": {"type": "integer"},
                   "options": {"type": "string", "default": "hilo,alerts"},
+                  "station_id": {"type": "string",
+                                 "description": "Optional; overrides nearest-to-lat/lon"},
               },
               ["lat", "lon", "year"]),
     ]
+
+
+def _ymd(d: str) -> str:
+    """Accept YYYY-MM-DD or YYYYMMDD; return YYYYMMDD (what app/ expects)."""
+    return d.replace("-", "")
 
 
 def _text(data) -> list[TextContent]:
@@ -154,8 +162,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         from app.tide_data import get_hilo_predictions
         return _text(get_hilo_predictions(
             arguments["station_id"],
-            arguments["begin_date"],
-            arguments["end_date"],
+            _ymd(arguments["begin_date"]),
+            _ymd(arguments["end_date"]),
         ))
 
     elif name == "get_station_info":
@@ -183,8 +191,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         from app.tide_data import get_hilo_predictions
         data = get_hilo_predictions(
             arguments["station_id"],
-            arguments["begin_date"],
-            arguments["end_date"],
+            _ymd(arguments["begin_date"]),
+            _ymd(arguments["end_date"]),
         )
         percentile = arguments.get("percentile", 0.90)
         highs = sorted([d for d in data if d["type"] == "H"], key=lambda x: x["height_ft"], reverse=True)
@@ -194,41 +202,50 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return _text({"extreme_highs": highs[:n_high], "extreme_lows": lows[:n_low]})
 
     elif name == "find_extreme_in_radius":
+        # Per station: the highest high and lowest low in the window, so both
+        # "highest" and "lowest tide within N miles" are answerable.
+        from concurrent.futures import ThreadPoolExecutor
         from app.station_finder import find_stations_in_radius
         from app.tide_data import get_hilo_predictions
+        begin, end = _ymd(arguments["begin_date"]), _ymd(arguments["end_date"])
         stations = find_stations_in_radius(
             arguments["lat"], arguments["lon"], arguments["radius_miles"]
         )
-        results = []
-        for s in stations[:10]:
+
+        def extremes(s):
             try:
-                data = get_hilo_predictions(s["id"], arguments["begin_date"], arguments["end_date"])
-                highs = sorted([d for d in data if d["type"] == "H"], key=lambda x: x["height_ft"], reverse=True)
-                if highs:
-                    top = highs[0]
-                    results.append({**top, "station_id": s["id"], "station_name": s["name"],
-                                    "distance_miles": s["distance_miles"]})
+                data = get_hilo_predictions(s["id"], begin, end)
             except Exception:
-                continue
-        results.sort(key=lambda x: x["height_ft"], reverse=True)
-        return _text(results)
+                return []
+            meta = {"station_id": s["id"], "station_name": s["name"],
+                    "distance_miles": round(s["distance_miles"], 1)}
+            out = []
+            highs = [d for d in data if d["type"] == "H"]
+            lows = [d for d in data if d["type"] == "L"]
+            if highs:
+                out.append({**max(highs, key=lambda d: d["height_ft"]), **meta})
+            if lows:
+                out.append({**min(lows, key=lambda d: d["height_ft"]), **meta})
+            return out
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            found = [e for batch in pool.map(extremes, stations) for e in batch]
+        highs = sorted((e for e in found if e["type"] == "H"),
+                       key=lambda e: e["height_ft"], reverse=True)
+        lows = sorted((e for e in found if e["type"] == "L"), key=lambda e: e["height_ft"])
+        return _text({
+            "stations_checked": len(stations),
+            "highest_highs": highs[:10],
+            "lowest_lows": lows[:10],
+        })
 
     elif name == "check_flood_risk":
-        from app.tide_data import get_hilo_predictions, _db_conn
+        from app.alert_engine import _get_flood_levels, check_flood_risk
         station_id = arguments["station_id"]
-        with _db_conn() as conn:
-            flood = conn.execute(
-                "SELECT minor_ft FROM flood_levels WHERE station_id=?", (station_id,)
-            ).fetchone()
-        if not flood:
+        if _get_flood_levels(station_id) is None:
             return _text({"message": "No NOAA flood thresholds for this station."})
-        minor_ft = flood[0]
-        data = get_hilo_predictions(station_id, arguments["begin_date"], arguments["end_date"])
-        risks = [
-            {**d, "flood_level": "minor" if d["height_ft"] >= minor_ft else None}
-            for d in data if d["type"] == "H" and d["height_ft"] >= minor_ft
-        ]
-        return _text(risks)
+        return _text(check_flood_risk(
+            station_id, _ymd(arguments["begin_date"]), _ymd(arguments["end_date"])))
 
     elif name == "get_slack_water":
         from app.special_events import get_slack_water
@@ -239,8 +256,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         from app.special_events import get_tidepooling_windows
         return _text(get_tidepooling_windows(
             arguments["station_id"],
-            arguments["begin_date"],
-            arguments["end_date"],
+            _ymd(arguments["begin_date"]),
+            _ymd(arguments["end_date"]),
             arguments["lat"],
             arguments["lon"],
         ))
@@ -254,16 +271,25 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         lon = arguments["lon"]
         year = arguments["year"]
         options = arguments.get("options", "hilo,alerts")
-        url = f"http://localhost:8000/calendar/{year}/{lat},{lon}.ics?options={options}"
+        if arguments.get("station_id"):
+            url = (f"http://localhost:8000/calendar/{year}/station/"
+                   f"{arguments['station_id']}.ics?options={options}")
+        else:
+            url = f"http://localhost:8000/calendar/{year}/{lat},{lon}.ics?options={options}"
         return _text({"url": url})
 
     else:
         return _text({"error": f"Unknown tool: {name}"})
 
 
+async def _run():
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
+
+
 def main():
     import asyncio
-    asyncio.run(stdio_server(server))
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

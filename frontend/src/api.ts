@@ -151,7 +151,19 @@ export async function fetchSolarRange(
   return res.json()
 }
 
-export function icsUrl(lat: number, lon: number, year: number, options = 'hilo,alerts', radiusMiles?: number): string {
+/**
+ * ICS download URL for a specific station. Addressing by station (not lat/lon)
+ * guarantees the file matches the station selected on screen — the lat/lon
+ * route picks whichever station is nearest the point.
+ */
+export function icsUrl(stationId: string, year: number, options = 'hilo,alerts', radiusMiles?: number): string {
+  let url = `/calendar/${year}/station/${encodeURIComponent(stationId)}.ics?options=${options}`
+  if (radiusMiles !== undefined) url += `&radius_miles=${radiusMiles}`
+  return url
+}
+
+/** ICS URL for the station nearest lat,lon; radius alerts centered on that point. */
+export function icsUrlForLocation(lat: number, lon: number, year: number, options = 'hilo,alerts', radiusMiles?: number): string {
   let url = `/calendar/${year}/${lat},${lon}.ics?options=${options}`
   if (radiusMiles !== undefined) url += `&radius_miles=${radiusMiles}`
   return url

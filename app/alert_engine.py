@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -8,6 +8,7 @@ from app.station_finder import find_stations_in_radius
 
 NOAA_MDAPI = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi"
 APP_HEADER = "moon_and_tides/0.1"
+FLOOD_NEGATIVE_CACHE_DAYS = 30
 
 
 def _get_mllw_offset(station_id: str) -> float | None:
@@ -31,14 +32,21 @@ def _get_flood_levels(station_id: str) -> dict | None:
     object with nos_minor/nos_moderate/nos_major (nws_* as fallback) referenced
     to station datum (STND) — NOT MLLW — so we subtract the station's MLLW
     datum offset before caching.
+
+    A station NOAA reports no thresholds for is cached as a NULL row and
+    re-checked after FLOOD_NEGATIVE_CACHE_DAYS. Network failures are not cached.
     """
     with _db_conn() as conn:
         row = conn.execute(
-            "SELECT minor_ft, moderate_ft, major_ft FROM flood_levels WHERE station_id=?",
+            "SELECT minor_ft, moderate_ft, major_ft, fetched_at FROM flood_levels WHERE station_id=?",
             (station_id,)
         ).fetchone()
     if row:
-        return {"minor_ft": row[0], "moderate_ft": row[1], "major_ft": row[2]}
+        if row[0] is not None:
+            return {"minor_ft": row[0], "moderate_ft": row[1], "major_ft": row[2]}
+        age = datetime.utcnow() - datetime.fromisoformat(row[3])
+        if age < timedelta(days=FLOOD_NEGATIVE_CACHE_DAYS):
+            return None
 
     url = f"{NOAA_MDAPI}/stations/{station_id}/floodlevels.json"
     try:
@@ -56,6 +64,7 @@ def _get_flood_levels(station_id: str) -> dict | None:
     moderate = _level("moderate")
     major = _level("major")
     if minor is None:
+        _cache_no_flood_data(station_id)
         return None
 
     offset = _get_mllw_offset(station_id)
@@ -76,16 +85,34 @@ def _get_flood_levels(station_id: str) -> dict | None:
     return {"minor_ft": minor, "moderate_ft": moderate, "major_ft": major}
 
 
+def _cache_no_flood_data(station_id: str) -> None:
+    with _db_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO flood_levels "
+            "(station_id, minor_ft, moderate_ft, major_ft, fetched_at) "
+            "VALUES (?, NULL, NULL, NULL, ?)",
+            (station_id, datetime.utcnow().isoformat())
+        )
+
+
 def compute_extreme_thresholds(
     station_id: str,
     percentile_high: float = 0.90,
     percentile_low: float = 0.10,
+    year: int | None = None,
 ) -> dict:
+    """Percentile cutoffs for king tides / extreme lows.
+
+    With `year`, uses that calendar year's predictions so every consumer (ICS,
+    dashboard feed, map) flags the same days for that year. Without it, uses
+    the trailing 365 days."""
     from datetime import datetime, timedelta
-    today = datetime.utcnow()
-    one_year_ago = today - timedelta(days=365)
-    begin = one_year_ago.strftime("%Y%m%d")
-    end = today.strftime("%Y%m%d")
+    if year is not None:
+        begin, end = f"{year}0101", f"{year}1231"
+    else:
+        today = datetime.utcnow()
+        begin = (today - timedelta(days=365)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
     data = get_hilo_predictions(station_id, begin, end)
 
     highs = sorted(d["height_ft"] for d in data if d["type"] == "H")
@@ -110,9 +137,11 @@ def find_extreme_tides(
     low_threshold_ft: float | None = None,
 ) -> list[dict]:
     if high_threshold_ft is None or low_threshold_ft is None:
-        thresholds = compute_extreme_thresholds(station_id)
-        high_threshold_ft = high_threshold_ft or thresholds["high_threshold_ft"]
-        low_threshold_ft = low_threshold_ft or thresholds["low_threshold_ft"]
+        thresholds = compute_extreme_thresholds(station_id, year=int(begin_date[:4]))
+        if high_threshold_ft is None:
+            high_threshold_ft = thresholds["high_threshold_ft"]
+        if low_threshold_ft is None:
+            low_threshold_ft = thresholds["low_threshold_ft"]
 
     data = get_hilo_predictions(station_id, begin_date, end_date)
     results = []
@@ -138,7 +167,7 @@ def find_extreme_in_radius(
     results = []
     for s in stations:
         try:
-            thresholds = compute_extreme_thresholds(s["id"])
+            thresholds = compute_extreme_thresholds(s["id"], year=int(begin_date[:4]))
             extremes = find_extreme_tides(
                 s["id"], begin_date, end_date,
                 high_threshold_ft=thresholds["high_threshold_ft"],

@@ -1,20 +1,25 @@
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from icalendar import Calendar, Event, Timezone, TimezoneStandard
+from icalendar import Calendar, Event
 
 from app.tide_data import get_hilo_predictions, get_station_tidal_range
 
 
-def _station_name(station_id: str) -> str:
-    try:
-        from app.station_finder import get_all_stations
-        for s in get_all_stations():
-            if s["id"] == station_id:
-                return s["name"]
-    except Exception:
-        pass
-    return station_id
+def _station_meta(station_id: str, lat: float | None = None,
+                  lon: float | None = None) -> tuple[str, ZoneInfo, float | None, float | None]:
+    """Return (name, timezone, lat, lon) for a station.
+
+    The timezone is always the station's. lat/lon are the caller's when given
+    (e.g. a radius centered on the user), else the station's own."""
+    from app.station_finder import get_station, station_timezone
+    s = get_station(station_id)
+    name = s["name"] if s else station_id
+    tz = station_timezone(station_id, lat, lon)
+    if s and (lat is None or lon is None):
+        lat, lon = s["lat"], s["lon"]
+    return name, tz, lat, lon
 
 
 def _make_uid(station_id: str, date_str: str, time_str: str, tag: str) -> str:
@@ -26,42 +31,26 @@ def _ft_to_m(ft: float) -> float:
     return round(ft * 0.3048, 2)
 
 
-def _build_calendar(station_id: str, year: int, station_name: str) -> Calendar:
+def _build_calendar(station_id: str, year: int, station_name: str, tz: ZoneInfo) -> Calendar:
+    # VTIMEZONE is generated from the events' TZIDs in build_tidal_ics.
     cal = Calendar()
     cal.add("prodid", "-//Tideline//Moon and Tides//EN")
     cal.add("version", "2.0")
     cal.add("calscale", "GREGORIAN")
     cal.add("x-wr-calname", f"Tides — {station_name} {year}")
-
-    tz = Timezone()
-    tz.add("tzid", "UTC")
-    tzstd = TimezoneStandard()
-    tzstd.add("dtstart", datetime(1970, 1, 1))
-    tzstd.add("tzoffsetfrom", timedelta(0))
-    tzstd.add("tzoffsetto", timedelta(0))
-    tzstd.add("tzname", "UTC")
-    tz.add_component(tzstd)
-    cal.add_component(tz)
+    cal.add("x-wr-timezone", tz.key)
     return cal
 
 
-def _extreme_thresholds(data: list[dict]) -> tuple[float, float]:
-    highs = sorted(d["height_ft"] for d in data if d["type"] == "H")
-    lows  = sorted(d["height_ft"] for d in data if d["type"] == "L")
-    if not highs or not lows:
-        return (999.0, -999.0)
-    return highs[int(len(highs) * 0.90)], lows[int(len(lows) * 0.10)]
-
-
 def _add_hilo_event(cal: Calendar, item: dict, next_item: dict | None,
-                    station_id: str, station_name: str, counts: dict) -> None:
+                    station_id: str, station_name: str, tz: ZoneInfo, counts: dict) -> None:
     h      = item["height_ft"]
     h_m    = _ft_to_m(h)
     ttype  = item["type"]
     date_s = item["date"]
     time_s = item["time"]
     t12    = item.get("time_12h", time_s)
-    dt     = datetime.strptime(f"{date_s} {time_s}", "%Y-%m-%d %H:%M")
+    dt     = datetime.strptime(f"{date_s} {time_s}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
 
     if ttype == "H":
         summary = f"🌊 High Tide — {h} ft"
@@ -121,12 +110,19 @@ def build_tidal_ics(
     if options is None:
         options = {"hilo": True}
 
-    station_name = _station_name(station_id)
-    cal   = _build_calendar(station_id, year, station_name)
+    # Without lat/lon, tidepooling sunrise/sunset and the radius-alert center
+    # default to the station itself, so a station calendar needs no coordinates.
+    station_name, tz, lat, lon = _station_meta(station_id, lat, lon)
+    cal   = _build_calendar(station_id, year, station_name, tz)
     data  = get_hilo_predictions(station_id, f"{year}0101", f"{year}1231")
     counts: dict = defaultdict(int)
 
-    high_thresh, low_thresh = _extreme_thresholds(data)
+    from app.alert_engine import compute_extreme_thresholds
+    try:
+        th = compute_extreme_thresholds(station_id, year=year)
+        high_thresh, low_thresh = th["high_threshold_ft"], th["low_threshold_ft"]
+    except ValueError:
+        high_thresh, low_thresh = 999.0, -999.0
 
     # ── hilo + extreme alerts ────────────────────────────────────────────────
     for i, item in enumerate(data):
@@ -159,13 +155,13 @@ def build_tidal_ics(
 
         if options.get("hilo", True):
             next_item = data[i + 1] if i + 1 < len(data) else None
-            _add_hilo_event(cal, item, next_item, station_id, station_name, counts)
+            _add_hilo_event(cal, item, next_item, station_id, station_name, tz, counts)
 
     # ── perigean spring tides ────────────────────────────────────────────────
     if options.get("perigean", False):
         try:
             from app.special_events import get_perigean_spring_tides
-            for e in get_perigean_spring_tides(year):
+            for e in get_perigean_spring_tides(year, tz=tz):
                 _add_allday(cal,
                     uid=f"perigean-{station_id}-{e['date']}@tideline",
                     summary=f"🌕 Perigean Spring Tide",
@@ -230,7 +226,7 @@ def build_tidal_ics(
                     t = slack["time"]
                     direction = slack["between"].replace("_", " ")
                     uid = f"slack-{station_id}-{date_s}-{t.replace(':', '')}@tideline"
-                    dt_ev = datetime.strptime(f"{date_s} {t}", "%Y-%m-%d %H:%M")
+                    dt_ev = datetime.strptime(f"{date_s} {t}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
                     ev = Event()
                     ev.add("uid",     uid)
                     ev.add("summary", f"⚓ Slack Water")
@@ -270,6 +266,7 @@ def build_tidal_ics(
         except Exception:
             pass
 
+    cal.add_missing_timezones()
     return cal.to_ical(), dict(counts)
 
 
@@ -278,12 +275,13 @@ def build_alerts_only_ics(
     year: int,
     lat: float | None = None,
     lon: float | None = None,
+    radius_miles: float = 75.0,
     **kwargs,
 ) -> tuple[bytes, dict]:
     """Build an alerts-only ICS (all-day events only). Returns (bytes, counts)."""
     return build_tidal_ics(
         station_id, year,
         options={"hilo": False, "alerts": True, "perigean": True,
-                 "flood": True, "radius": lat is not None},
-        lat=lat, lon=lon,
+                 "flood": True, "radius": True},
+        lat=lat, lon=lon, radius_miles=radius_miles,
     )

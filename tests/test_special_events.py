@@ -122,3 +122,30 @@ def test_tidal_bore_known_location():
 def test_tidal_bore_unknown_location():
     result = get_tidal_bore_times("portland_me", "2026-06-21")
     assert result is None
+
+
+def test_perigean_dates_localized_to_station_timezone():
+    """Dates are the syzygy's local calendar date when a tz is given, so an
+    evening-Pacific full moon isn't filed under the next (UTC) day."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.special_events import get_perigean_spring_tides
+    la = ZoneInfo("America/Los_Angeles")
+    utc_events = get_perigean_spring_tides(2026)
+    local_events = get_perigean_spring_tides(2026, tz=la)
+    assert utc_events
+    for u, l in zip(utc_events, local_events):
+        moment = datetime.fromisoformat(u["syzygy_utc"]).replace(tzinfo=ZoneInfo("UTC"))
+        assert u["date"] == moment.strftime("%Y-%m-%d")
+        assert l["date"] == moment.astimezone(la).strftime("%Y-%m-%d")
+
+
+def test_solar_day_sunrise_and_sunset_on_requested_local_date():
+    """Search starts at local midnight (UTC midnight returned the previous
+    day's sunset) and refraction isn't double-counted. Seattle, 2026 solstice:
+    published sunrise 5:11 AM, sunset 9:10-9:11 PM PDT."""
+    from zoneinfo import ZoneInfo
+    from app.solar_cache import _compute_solar
+    d = _compute_solar(47.6062, -122.3321, "2026-06-21", ZoneInfo("America/Los_Angeles"))
+    assert d["sunrise"] == "05:11"
+    assert d["sunset"] in ("21:10", "21:11")

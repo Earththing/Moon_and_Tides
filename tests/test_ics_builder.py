@@ -102,3 +102,25 @@ def test_alerts_only_ics_parses():
     assert isinstance(events, list)
     # counts should be a dict (may be empty if mock data has no extremes)
     assert isinstance(counts, dict)
+
+
+def test_ics_timed_events_use_station_timezone():
+    # Regression: DTSTART was emitted as a floating time (no TZID) alongside an
+    # unused UTC VTIMEZONE, so Google Calendar read NOAA's local (lst_ldt) tide
+    # times as UTC and shifted every event by the station's UTC offset.
+    from datetime import timezone
+    from icalendar import Calendar
+    with patch("httpx.get", side_effect=_httpx_side_effect):
+        ics, _ = build_tidal_ics("9414290", 2026)
+    assert b"DTSTART;TZID=America/Los_Angeles:" in ics
+    cal = Calendar.from_ical(ics)
+    assert {tz["TZID"] for tz in cal.walk("VTIMEZONE")} == {"America/Los_Angeles"}
+    starts = {
+        c["UID"]: c.decoded("DTSTART")
+        for c in cal.walk("VEVENT") if c["UID"].endswith("-H@tideline")
+    }
+    # 03:15 local: PST (UTC-8) in January, PDT (UTC-7) in July
+    jan = starts["tide-9414290-2026-01-15-0315-H@tideline"]
+    jul = starts["tide-9414290-2026-07-15-0315-H@tideline"]
+    assert jan.astimezone(timezone.utc).hour == 11
+    assert jul.astimezone(timezone.utc).hour == 10

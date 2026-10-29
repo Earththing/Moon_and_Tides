@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import NavBar from '../components/NavBar'
 import CoastalMap, { type MapStation } from '../components/CoastalMap'
 import {
-  fetchStationsRadius, fetchMapStatus, fetchTidesDay, icsUrl,
+  fetchStationsRadius, fetchMapStatus, fetchTidesDay, icsUrlForLocation,
   type Station, type MapStationStatus, type CurvePoint,
 } from '../api'
 import { loadLocation } from '../station-store'
+import { todayStr } from '../dates'
 import { computeTideStatus, type ColorMode, MAP_COLORS } from '../tide-status'
 
 const DEFAULT_LAT = 47.6062
@@ -14,9 +15,6 @@ const MAX_STATIONS = 60
 
 type FilterMode = 'all' | 'harmonic' | 'flood' | 'king'
 
-function todayStr() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function nowMinutes() {
   const d = new Date()
@@ -296,7 +294,7 @@ export default function MapPage() {
 
           <div className="p-3 border-t border-border">
             <a
-              href={icsUrl(lat, lon, year, 'hilo,alerts,radius', radiusMiles)}
+              href={icsUrlForLocation(lat, lon, year, 'hilo,alerts,radius', radiusMiles)}
               download
               className="block w-full text-center py-2 px-4 bg-oceanLight text-white text-sm font-semibold rounded hover:bg-ocean transition-colors"
             >

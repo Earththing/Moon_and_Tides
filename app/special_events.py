@@ -115,8 +115,23 @@ def _find_perigee_near(moon: "ephem.Moon", syzygy_date, window_days: float = 7.0
     return min_date, min_dist
 
 
-def get_perigean_spring_tides(year: int) -> list[dict]:
-    """Find dates where lunar perigee coincides with new/full moon (syzygy)."""
+def _localize_perigean(events: list[dict], tz) -> list[dict]:
+    """Re-derive each event's calendar date in `tz` from its UTC syzygy time."""
+    if tz is None:
+        return events
+    from zoneinfo import ZoneInfo
+    out = []
+    for e in events:
+        utc = datetime.fromisoformat(e["syzygy_utc"]).replace(tzinfo=ZoneInfo("UTC"))
+        out.append({**e, "date": utc.astimezone(tz).strftime("%Y-%m-%d")})
+    return out
+
+
+def get_perigean_spring_tides(year: int, tz=None) -> list[dict]:
+    """Find dates where lunar perigee coincides with new/full moon (syzygy).
+
+    Dates are UTC unless `tz` (a tzinfo) is given, in which case each event's
+    date is the local calendar date of the syzygy in that zone."""
     from app.tide_data import _db_conn
     import json as _json
 
@@ -125,7 +140,10 @@ def get_perigean_spring_tides(year: int) -> list[dict]:
             "SELECT json_data FROM perigean_events WHERE year=?", (year,)
         ).fetchone()
     if row:
-        return _json.loads(row[0])
+        cached = _json.loads(row[0])
+        # Older cache rows predate syzygy_utc — recompute those
+        if all("syzygy_utc" in e for e in cached):
+            return _localize_perigean(cached, tz)
 
     results = []
     moon = ephem.Moon()
@@ -157,6 +175,7 @@ def get_perigean_spring_tides(year: int) -> list[dict]:
                     dist_km = round(perigee_dist * 149597870.7, 0)
                     results.append({
                         "date": date_str,
+                        "syzygy_utc": syzygy_dt.isoformat(timespec="minutes"),
                         "moon_phase": phase,
                         "perigee_distance_km": dist_km,
                         "description": (
@@ -175,7 +194,7 @@ def get_perigean_spring_tides(year: int) -> list[dict]:
             (year, _json.dumps(results), datetime.utcnow().isoformat())
         )
 
-    return results
+    return _localize_perigean(results, tz)
 
 
 def get_tidal_bore_times(location_name: str, date: str) -> dict | None:

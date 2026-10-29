@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   fetchNearestStations, fetchStation, fetchTidesDay, fetchTidesRange,
-  fetchYearSummary, fetchSpecialEvents, fetchSolarDay, fetchSolarRange,
+  fetchYearSummary, fetchSpecialEvents, fetchSolarDay, fetchSolarRange, fetchStationsRadius,
   type Station, type TideEvent, type CurvePoint, type SolarDay,
 } from '../api'
 import type { CalOptions } from '../types'
 import { saveStation, saveLocation, loadLocation } from '../station-store'
+import { localDateStr, todayStr } from '../dates'
 import NavBar from '../components/NavBar'
 import TopBar from '../components/TopBar'
 import DateNav from '../components/DateNav'
@@ -18,12 +19,6 @@ import LocationSearch from '../components/LocationSearch'
 
 const DEFAULT_LAT = 47.6062
 const DEFAULT_LON = -122.3321
-const CURRENT_YEAR = new Date().getFullYear()
-
-
-function todayStr() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 export default function Dashboard() {
   const { stationId: paramStation, year: paramYear } = useParams<{ stationId?: string; year?: string }>()
@@ -36,8 +31,10 @@ export default function Dashboard() {
   const [selectedId, setSelectedId] = useState(paramStation ?? '')
   const [selectedStation, setSelectedStation] = useState<Station | null>(null)
   const [view, setView] = useState<'day' | 'week' | 'month' | 'year'>('day')
-  const [year] = useState(paramYear ? Number(paramYear) : CURRENT_YEAR)
   const [viewDate, setViewDate] = useState(todayStr())
+  // Calendar year: the URL's /year/:year if given, else the year being viewed,
+  // so browsing into January offers next year's calendar.
+  const year = paramYear ? Number(paramYear) : Number(viewDate.slice(0, 4))
   const [todayEvents, setTodayEvents] = useState<TideEvent[]>([])
   const [curveData, setCurveData] = useState<CurvePoint[]>([])
   const [rangeEvents, setRangeEvents] = useState<TideEvent[]>([])   // week/month hilo
@@ -96,13 +93,13 @@ export default function Dashboard() {
     let begin: string, end: string
     if (view === 'week') {
       const e = new Date(base); e.setDate(e.getDate() + 6)
-      begin = base.toISOString().slice(0, 10)
-      end   = e.toISOString().slice(0, 10)
+      begin = localDateStr(base)
+      end   = localDateStr(e)
     } else {
       // Full calendar month
       begin = viewDate.slice(0, 7) + '-01'
       const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0)
-      end = lastDay.toISOString().slice(0, 10)
+      end = localDateStr(lastDay)
     }
     fetchTidesRange(selectedId, begin, end).then(r => setRangeEvents(r.hilo)).catch(console.error)
   }, [selectedId, view, viewDate])
@@ -130,12 +127,12 @@ export default function Dashboard() {
     let begin: string, end: string
     if (view === 'week') {
       const e = new Date(base); e.setDate(e.getDate() + 6)
-      begin = base.toISOString().slice(0, 10)
-      end   = e.toISOString().slice(0, 10)
+      begin = localDateStr(base)
+      end   = localDateStr(e)
     } else {
       begin = viewDate.slice(0, 7) + '-01'
       const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0)
-      end = lastDay.toISOString().slice(0, 10)
+      end = localDateStr(lastDay)
     }
     fetchSolarRange(lat, lon, begin, end).then(setSolarRange).catch(() => setSolarRange([]))
   }, [lat, lon, view, viewDate])
@@ -143,7 +140,9 @@ export default function Dashboard() {
   // Load special events for feed
   useEffect(() => {
     if (!selectedId) return
-    fetchSpecialEvents(selectedId, year, lat, lon).then(ev => {
+    // "Coming up" is relative to today, whatever date or year is being viewed
+    const feedYear = Number(todayStr().slice(0, 4))
+    fetchSpecialEvents(selectedId, feedYear, lat, lon).then(ev => {
       const items: FeedItem[] = []
 
       type PerigeanEvent = { date: string; moon_phase: string; description: string }
@@ -169,14 +168,23 @@ export default function Dashboard() {
       items.sort((a, b) => a.date.localeCompare(b.date))
       setFeedItems(items)
     }).catch(console.error)
-  }, [selectedId, year, lat, lon])
+  }, [selectedId, lat, lon])
 
-  // Radius stations
+  // Radius stations: ask the server — the nearby list holds only 5 stations,
+  // so filtering it capped the count at 5. Centered on the selected station,
+  // like the radius alerts in its calendar. Debounced while the slider moves.
+  const centerLat = selectedStation?.lat ?? lat
+  const centerLon = selectedStation?.lon ?? lon
   useEffect(() => {
     if (radiusMiles <= 10) { setRadiusStations([]); return }
-    // Reuse already loaded list filtered by distance
-    setRadiusStations(stations.filter(s => (s.distance_miles ?? 0) <= radiusMiles))
-  }, [radiusMiles, stations])
+    let cancelled = false
+    const t = setTimeout(() => {
+      fetchStationsRadius(centerLat, centerLon, radiusMiles)
+        .then(list => { if (!cancelled) setRadiusStations(list) })
+        .catch(console.error)
+    }, 250)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [radiusMiles, centerLat, centerLon])
 
   function handleStationSelect(id: string) {
     setSelectedId(id)
@@ -234,7 +242,7 @@ export default function Dashboard() {
           else if (view === 'month') d.setMonth(d.getMonth() - 1)
           else if (view === 'year')  d.setFullYear(d.getFullYear() - 1)
           else                       d.setDate(d.getDate() - 1)
-          setViewDate(d.toISOString().slice(0, 10))
+          setViewDate(localDateStr(d))
         }}
         onNext={() => {
           const d = new Date(viewDate + 'T12:00:00')
@@ -242,7 +250,7 @@ export default function Dashboard() {
           else if (view === 'month') d.setMonth(d.getMonth() + 1)
           else if (view === 'year')  d.setFullYear(d.getFullYear() + 1)
           else                       d.setDate(d.getDate() + 1)
-          setViewDate(d.toISOString().slice(0, 10))
+          setViewDate(localDateStr(d))
         }}
         onDateChange={setViewDate}
         onToday={() => setViewDate(todayStr())}
@@ -283,8 +291,6 @@ export default function Dashboard() {
           <TidePanel
             station={selectedStation}
             todayEvents={todayEvents}
-            lat={lat}
-            lon={lon}
             year={year}
             options={options}
             onOptionsChange={setOptions}
