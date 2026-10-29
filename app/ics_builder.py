@@ -1,20 +1,33 @@
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from icalendar import Calendar, Event, Timezone, TimezoneStandard
+from icalendar import Calendar, Event
 
 from app.tide_data import get_hilo_predictions, get_station_tidal_range
 
 
-def _station_name(station_id: str) -> str:
+def _station_meta(station_id: str, lat: float | None = None,
+                  lon: float | None = None) -> tuple[str, ZoneInfo]:
+    """Return (station name, station timezone).
+
+    NOAA times are requested as lst_ldt (station local), so events must carry
+    the station's IANA zone. Falls back to the caller's lat/lon, then UTC."""
+    name = station_id
     try:
         from app.station_finder import get_all_stations
         for s in get_all_stations():
             if s["id"] == station_id:
-                return s["name"]
+                name = s["name"]
+                lat, lon = s["lat"], s["lon"]
+                break
     except Exception:
         pass
-    return station_id
+    tz_name = None
+    if lat is not None and lon is not None:
+        from app.solar_cache import _tf
+        tz_name = _tf.timezone_at(lat=lat, lng=lon)
+    return name, ZoneInfo(tz_name or "UTC")
 
 
 def _make_uid(station_id: str, date_str: str, time_str: str, tag: str) -> str:
@@ -26,22 +39,14 @@ def _ft_to_m(ft: float) -> float:
     return round(ft * 0.3048, 2)
 
 
-def _build_calendar(station_id: str, year: int, station_name: str) -> Calendar:
+def _build_calendar(station_id: str, year: int, station_name: str, tz: ZoneInfo) -> Calendar:
+    # VTIMEZONE is generated from the events' TZIDs in build_tidal_ics.
     cal = Calendar()
     cal.add("prodid", "-//Tideline//Moon and Tides//EN")
     cal.add("version", "2.0")
     cal.add("calscale", "GREGORIAN")
     cal.add("x-wr-calname", f"Tides — {station_name} {year}")
-
-    tz = Timezone()
-    tz.add("tzid", "UTC")
-    tzstd = TimezoneStandard()
-    tzstd.add("dtstart", datetime(1970, 1, 1))
-    tzstd.add("tzoffsetfrom", timedelta(0))
-    tzstd.add("tzoffsetto", timedelta(0))
-    tzstd.add("tzname", "UTC")
-    tz.add_component(tzstd)
-    cal.add_component(tz)
+    cal.add("x-wr-timezone", tz.key)
     return cal
 
 
@@ -54,14 +59,14 @@ def _extreme_thresholds(data: list[dict]) -> tuple[float, float]:
 
 
 def _add_hilo_event(cal: Calendar, item: dict, next_item: dict | None,
-                    station_id: str, station_name: str, counts: dict) -> None:
+                    station_id: str, station_name: str, tz: ZoneInfo, counts: dict) -> None:
     h      = item["height_ft"]
     h_m    = _ft_to_m(h)
     ttype  = item["type"]
     date_s = item["date"]
     time_s = item["time"]
     t12    = item.get("time_12h", time_s)
-    dt     = datetime.strptime(f"{date_s} {time_s}", "%Y-%m-%d %H:%M")
+    dt     = datetime.strptime(f"{date_s} {time_s}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
 
     if ttype == "H":
         summary = f"🌊 High Tide — {h} ft"
@@ -121,8 +126,8 @@ def build_tidal_ics(
     if options is None:
         options = {"hilo": True}
 
-    station_name = _station_name(station_id)
-    cal   = _build_calendar(station_id, year, station_name)
+    station_name, tz = _station_meta(station_id, lat, lon)
+    cal   = _build_calendar(station_id, year, station_name, tz)
     data  = get_hilo_predictions(station_id, f"{year}0101", f"{year}1231")
     counts: dict = defaultdict(int)
 
@@ -159,7 +164,7 @@ def build_tidal_ics(
 
         if options.get("hilo", True):
             next_item = data[i + 1] if i + 1 < len(data) else None
-            _add_hilo_event(cal, item, next_item, station_id, station_name, counts)
+            _add_hilo_event(cal, item, next_item, station_id, station_name, tz, counts)
 
     # ── perigean spring tides ────────────────────────────────────────────────
     if options.get("perigean", False):
@@ -230,7 +235,7 @@ def build_tidal_ics(
                     t = slack["time"]
                     direction = slack["between"].replace("_", " ")
                     uid = f"slack-{station_id}-{date_s}-{t.replace(':', '')}@tideline"
-                    dt_ev = datetime.strptime(f"{date_s} {t}", "%Y-%m-%d %H:%M")
+                    dt_ev = datetime.strptime(f"{date_s} {t}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
                     ev = Event()
                     ev.add("uid",     uid)
                     ev.add("summary", f"⚓ Slack Water")
@@ -270,6 +275,7 @@ def build_tidal_ics(
         except Exception:
             pass
 
+    cal.add_missing_timezones()
     return cal.to_ical(), dict(counts)
 
 
