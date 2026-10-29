@@ -3,6 +3,7 @@ import math
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -74,6 +75,32 @@ def get_all_stations() -> list[dict]:
                  json.dumps(station), now)
             )
     return stations
+
+
+def get_station(station_id: str) -> dict | None:
+    """Station record from the cached station list, or None."""
+    try:
+        for s in get_all_stations():
+            if s["id"] == station_id:
+                return s
+    except Exception:
+        pass
+    return None
+
+
+def station_timezone(station_id: str, lat: float | None = None,
+                     lon: float | None = None) -> ZoneInfo:
+    """IANA timezone of a station. NOAA lst_ldt times are in this zone.
+
+    Uses the station's own coordinates; falls back to lat/lon, then UTC."""
+    from app.solar_cache import _tf
+    s = get_station(station_id)
+    if s:
+        lat, lon = s["lat"], s["lon"]
+    tz_name = None
+    if lat is not None and lon is not None:
+        tz_name = _tf.timezone_at(lat=lat, lng=lon)
+    return ZoneInfo(tz_name or "UTC")
 
 
 def is_subordinate_station(station_id: str) -> bool:

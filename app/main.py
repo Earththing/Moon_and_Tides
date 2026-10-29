@@ -74,7 +74,7 @@ def stations_radius(
 @app.get("/api/v1/station/{station_id}")
 def station_detail(station_id: str):
     from app.station_finder import get_all_stations, get_tidal_type
-    from app.tide_data import get_station_tidal_range, _db_conn
+    from app.tide_data import get_station_tidal_range
 
     stations = get_all_stations()
     station = next((s for s in stations if s["id"] == station_id), None)
@@ -92,11 +92,11 @@ def station_detail(station_id: str):
     except Exception:
         tidal_type = "unknown"
 
-    with _db_conn() as conn:
-        flood = conn.execute(
-            "SELECT minor_ft, moderate_ft, major_ft FROM flood_levels WHERE station_id=?",
-            (station_id,)
-        ).fetchone()
+    from app.alert_engine import _get_flood_levels
+    try:
+        flood = _get_flood_levels(station_id)  # fetches on cache miss
+    except Exception:
+        flood = None
 
     return {
         **station,
@@ -105,8 +105,8 @@ def station_detail(station_id: str):
         "mean_high_ft": tr["mean_high_ft"],
         "mean_low_ft": tr["mean_low_ft"],
         "has_flood_thresholds": flood is not None,
-        "flood_minor_ft": flood[0] if flood else None,
-        "flood_moderate_ft": flood[1] if flood else None,
+        "flood_minor_ft": flood["minor_ft"] if flood else None,
+        "flood_moderate_ft": flood["moderate_ft"] if flood else None,
     }
 
 
@@ -182,46 +182,56 @@ def special_events(
     radius_miles: float = Query(75.0),
 ):
     from app.special_events import get_perigean_spring_tides, get_tidepooling_windows
-    from app.alert_engine import find_extreme_tides, compute_extreme_thresholds, check_flood_risk
+    from app.alert_engine import find_extreme_tides, check_flood_risk
+    from app.station_finder import station_timezone
 
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    year_end = f"{year}-12-31"
+    # "Today" is the station's local date — NOAA times are station-local, and a
+    # UTC date is already tomorrow on US evenings.
+    tz = station_timezone(station_id, lat, lon)
+    today = datetime.now(tz).date()
+    if year == today.year:
+        # Upcoming events: look past Dec 31 so the feed isn't empty in late December
+        begin_d = today
+        end_d = max(date(year, 12, 31), today + timedelta(days=60))
+    else:
+        begin_d, end_d = date(year, 1, 1), date(year, 12, 31)
+    begin_iso, end_iso = begin_d.isoformat(), end_d.isoformat()
+    begin_fmt, end_fmt = begin_iso.replace("-", ""), end_iso.replace("-", "")
 
-    # Perigean spring tides for the whole year, filtered to upcoming
+    # One segment per calendar year so each year uses its own thresholds
+    segments = [
+        (max(begin_d, date(y, 1, 1)), min(end_d, date(y, 12, 31)))
+        for y in range(begin_d.year, end_d.year + 1)
+    ]
+
+    perigean: list = []
+    for y in range(begin_d.year, end_d.year + 1):
+        try:
+            perigean += [e for e in get_perigean_spring_tides(y, tz=tz)
+                         if begin_iso <= e["date"] <= end_iso]
+        except Exception:
+            pass
+
+    # King tide alerts: 90th-percentile threshold of each calendar year
+    king_tides: list = []
+    for seg_begin, seg_end in segments:
+        try:
+            king_tides += find_extreme_tides(
+                station_id, seg_begin.strftime("%Y%m%d"), seg_end.strftime("%Y%m%d"))
+        except Exception:
+            pass
+
     try:
-        perigean = [e for e in get_perigean_spring_tides(year) if e["date"] >= today]
-    except Exception:
-        perigean = []
-
-    # King tide alerts: rest of year using 90th-percentile threshold
-    try:
-        thresholds = compute_extreme_thresholds(station_id)
-        begin_fmt = today.replace("-", "")
-        end_fmt = year_end.replace("-", "")
-        king_tides = find_extreme_tides(
-            station_id, begin_fmt, end_fmt,
-            high_threshold_ft=thresholds["high_threshold_ft"],
-            low_threshold_ft=thresholds["low_threshold_ft"],
-        )
-    except Exception:
-        king_tides = []
-
-    # Flood risk events
-    try:
-        flood = check_flood_risk(station_id, today.replace("-", ""), year_end.replace("-", ""))
+        flood = check_flood_risk(station_id, begin_fmt, end_fmt)
     except Exception:
         flood = []
 
-    # Tidepooling windows (requires lat/lon)
+    # Tidepooling windows (requires lat/lon), next 60 days
     tidepooling: list = []
     if lat is not None and lon is not None:
         try:
-            # Look 60 days ahead
-            from datetime import timedelta
-            end_tp = (datetime.utcnow() + timedelta(days=60)).strftime("%Y%m%d")
-            tidepooling = get_tidepooling_windows(
-                station_id, today.replace("-", ""), end_tp, lat, lon
-            )[:10]
+            end_tp = min(end_d, begin_d + timedelta(days=60)).strftime("%Y%m%d")
+            tidepooling = get_tidepooling_windows(station_id, begin_fmt, end_tp, lat, lon)[:10]
         except Exception:
             tidepooling = []
 
@@ -260,7 +270,7 @@ def map_status(
             return None  # no tide data — omit station entirely
         if extremes:
             try:
-                th = compute_extreme_thresholds(sid)
+                th = compute_extreme_thresholds(sid, year=int(date[:4]))
                 entry["high_threshold_ft"] = th["high_threshold_ft"]
                 entry["low_threshold_ft"] = th["low_threshold_ft"]
             except Exception:
@@ -295,6 +305,74 @@ def ics_preview(
     return {"counts": counts, "total": sum(counts.values())}
 
 
+def _parse_lat_lon(lat_lon: str) -> tuple[float, float]:
+    try:
+        lat_str, lon_str = lat_lon.split(",")
+        return float(lat_str), float(lon_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid lat,lon format")
+
+
+def _nearest_station_id(lat: float, lon: float) -> str:
+    from app.station_finder import find_nearest_stations
+    stations = find_nearest_stations(lat, lon, max_results=1)
+    if not stations:
+        raise HTTPException(status_code=404, detail="No stations found")
+    return stations[0]["id"]
+
+
+def _ics_response(ics_bytes: bytes, filename: str) -> StreamingResponse:
+    return StreamingResponse(
+        iter([ics_bytes]),
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _require_station(station_id: str) -> None:
+    from app.station_finder import get_station
+    if get_station(station_id) is None:
+        raise HTTPException(status_code=404, detail="Station not found")
+
+
+# Route order matters: "{lat_lon}.ics" also matches "37.8,-122.4-alerts.ics",
+# so every -alerts route is registered before its plain .ics sibling.
+
+@app.get("/calendar/{year}/station/{station_id}-alerts.ics")
+def calendar_station_alerts_ics(year: int, station_id: str, radius_miles: float = Query(75.0)):
+    """Alerts-only ICS for an explicit station (what the dashboard selected)."""
+    from app.ics_builder import build_alerts_only_ics
+    _require_station(station_id)
+    ics_bytes, _ = build_alerts_only_ics(station_id, year, radius_miles=radius_miles)
+    return _ics_response(ics_bytes, f"alerts_{station_id}_{year}.ics")
+
+
+@app.get("/calendar/{year}/station/{station_id}.ics")
+def calendar_station_ics(
+    year: int,
+    station_id: str,
+    options: str = Query("hilo"),
+    radius_miles: float = Query(75.0),
+):
+    """Full ICS for an explicit station. Tidepooling and radius alerts are
+    centered on the station's own coordinates."""
+    from app.ics_builder import build_tidal_ics
+    _require_station(station_id)
+    opts = {o: True for o in options.split(",")}
+    ics_bytes, _ = build_tidal_ics(station_id, year, opts, radius_miles=radius_miles)
+    return _ics_response(ics_bytes, f"tides_{station_id}_{year}.ics")
+
+
+@app.get("/calendar/{year}/{lat_lon}-alerts.ics")
+def calendar_alerts_ics(year: int, lat_lon: str, radius_miles: float = Query(75.0)):
+    from app.ics_builder import build_alerts_only_ics
+    lat, lon = _parse_lat_lon(lat_lon)
+    station_id = _nearest_station_id(lat, lon)
+    ics_bytes, _ = build_alerts_only_ics(station_id, year, lat=lat, lon=lon,
+                                         radius_miles=radius_miles)
+    return _ics_response(ics_bytes, f"alerts_{station_id}_{year}.ics")
+
+
 @app.get("/calendar/{year}/{lat_lon}.ics")
 def calendar_ics(
     year: int,
@@ -302,50 +380,12 @@ def calendar_ics(
     options: str = Query("hilo"),
     radius_miles: float = Query(75.0),
 ):
-    try:
-        lat_str, lon_str = lat_lon.split(",")
-        lat, lon = float(lat_str), float(lon_str)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid lat,lon format")
-
-    from app.station_finder import find_nearest_stations
+    """Full ICS for the station nearest lat,lon."""
     from app.ics_builder import build_tidal_ics
-    stations = find_nearest_stations(lat, lon, max_results=1)
-    if not stations:
-        raise HTTPException(status_code=404, detail="No stations found")
-
-    station_id = stations[0]["id"]
+    lat, lon = _parse_lat_lon(lat_lon)
+    station_id = _nearest_station_id(lat, lon)
     opts = {o: True for o in options.split(",")}
     ics_bytes, _ = build_tidal_ics(
         station_id, year, opts, lat=lat, lon=lon, radius_miles=radius_miles
     )
-
-    return StreamingResponse(
-        iter([ics_bytes]),
-        media_type="text/calendar",
-        headers={"Content-Disposition": f'attachment; filename="tides_{station_id}_{year}.ics"'},
-    )
-
-
-@app.get("/calendar/{year}/{lat_lon}-alerts.ics")
-def calendar_alerts_ics(year: int, lat_lon: str):
-    try:
-        lat_str, lon_str = lat_lon.split(",")
-        lat, lon = float(lat_str), float(lon_str)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid lat,lon format")
-
-    from app.station_finder import find_nearest_stations
-    from app.ics_builder import build_alerts_only_ics
-    stations = find_nearest_stations(lat, lon, max_results=1)
-    if not stations:
-        raise HTTPException(status_code=404, detail="No stations found")
-
-    station_id = stations[0]["id"]
-    ics_bytes, _ = build_alerts_only_ics(station_id, year, lat=lat, lon=lon)
-
-    return StreamingResponse(
-        iter([ics_bytes]),
-        media_type="text/calendar",
-        headers={"Content-Disposition": f'attachment; filename="alerts_{station_id}_{year}.ics"'},
-    )
+    return _ics_response(ics_bytes, f"tides_{station_id}_{year}.ics")

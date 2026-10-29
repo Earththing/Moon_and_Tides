@@ -8,26 +8,16 @@ from app.tide_data import get_hilo_predictions, get_station_tidal_range
 
 
 def _station_meta(station_id: str, lat: float | None = None,
-                  lon: float | None = None) -> tuple[str, ZoneInfo]:
-    """Return (station name, station timezone).
+                  lon: float | None = None) -> tuple[str, ZoneInfo, float | None, float | None]:
+    """Return (name, timezone, lat, lon) for a station.
 
-    NOAA times are requested as lst_ldt (station local), so events must carry
-    the station's IANA zone. Falls back to the caller's lat/lon, then UTC."""
-    name = station_id
-    try:
-        from app.station_finder import get_all_stations
-        for s in get_all_stations():
-            if s["id"] == station_id:
-                name = s["name"]
-                lat, lon = s["lat"], s["lon"]
-                break
-    except Exception:
-        pass
-    tz_name = None
-    if lat is not None and lon is not None:
-        from app.solar_cache import _tf
-        tz_name = _tf.timezone_at(lat=lat, lng=lon)
-    return name, ZoneInfo(tz_name or "UTC")
+    lat/lon are the station's own coordinates when known, else the caller's."""
+    from app.station_finder import get_station, station_timezone
+    s = get_station(station_id)
+    name = s["name"] if s else station_id
+    if s:
+        lat, lon = s["lat"], s["lon"]
+    return name, station_timezone(station_id, lat, lon), lat, lon
 
 
 def _make_uid(station_id: str, date_str: str, time_str: str, tag: str) -> str:
@@ -48,14 +38,6 @@ def _build_calendar(station_id: str, year: int, station_name: str, tz: ZoneInfo)
     cal.add("x-wr-calname", f"Tides — {station_name} {year}")
     cal.add("x-wr-timezone", tz.key)
     return cal
-
-
-def _extreme_thresholds(data: list[dict]) -> tuple[float, float]:
-    highs = sorted(d["height_ft"] for d in data if d["type"] == "H")
-    lows  = sorted(d["height_ft"] for d in data if d["type"] == "L")
-    if not highs or not lows:
-        return (999.0, -999.0)
-    return highs[int(len(highs) * 0.90)], lows[int(len(lows) * 0.10)]
 
 
 def _add_hilo_event(cal: Calendar, item: dict, next_item: dict | None,
@@ -126,12 +108,19 @@ def build_tidal_ics(
     if options is None:
         options = {"hilo": True}
 
-    station_name, tz = _station_meta(station_id, lat, lon)
+    # Tidepooling sunrise/sunset and the radius-alert center default to the
+    # station itself, so a station-addressed calendar needs no coordinates.
+    station_name, tz, lat, lon = _station_meta(station_id, lat, lon)
     cal   = _build_calendar(station_id, year, station_name, tz)
     data  = get_hilo_predictions(station_id, f"{year}0101", f"{year}1231")
     counts: dict = defaultdict(int)
 
-    high_thresh, low_thresh = _extreme_thresholds(data)
+    from app.alert_engine import compute_extreme_thresholds
+    try:
+        th = compute_extreme_thresholds(station_id, year=year)
+        high_thresh, low_thresh = th["high_threshold_ft"], th["low_threshold_ft"]
+    except ValueError:
+        high_thresh, low_thresh = 999.0, -999.0
 
     # ── hilo + extreme alerts ────────────────────────────────────────────────
     for i, item in enumerate(data):
@@ -170,7 +159,7 @@ def build_tidal_ics(
     if options.get("perigean", False):
         try:
             from app.special_events import get_perigean_spring_tides
-            for e in get_perigean_spring_tides(year):
+            for e in get_perigean_spring_tides(year, tz=tz):
                 _add_allday(cal,
                     uid=f"perigean-{station_id}-{e['date']}@tideline",
                     summary=f"🌕 Perigean Spring Tide",
@@ -284,12 +273,13 @@ def build_alerts_only_ics(
     year: int,
     lat: float | None = None,
     lon: float | None = None,
+    radius_miles: float = 75.0,
     **kwargs,
 ) -> tuple[bytes, dict]:
     """Build an alerts-only ICS (all-day events only). Returns (bytes, counts)."""
     return build_tidal_ics(
         station_id, year,
         options={"hilo": False, "alerts": True, "perigean": True,
-                 "flood": True, "radius": lat is not None},
-        lat=lat, lon=lon,
+                 "flood": True, "radius": True},
+        lat=lat, lon=lon, radius_miles=radius_miles,
     )

@@ -21,16 +21,28 @@ def _round_coord(v: float) -> float:
     return round(v, 4)
 
 
+# Bump when _compute_solar output changes; cached rows with another version
+# are recomputed. v2: search from local midnight (v1 used UTC midnight, which
+# returned the previous day's sunset for every US station) and pressure=0
+# (refraction was applied twice, widening the day by ~3-4 minutes each end).
+SOLAR_VERSION = 2
+
+
 def _compute_solar(lat: float, lon: float, date_str: str, tz: ZoneInfo) -> dict:
+    from datetime import datetime
     obs = ephem.Observer()
     obs.lat = str(lat)
     obs.lon = str(lon)
     obs.horizon = "-0:34"
-    obs.date = date_str
+    obs.pressure = 0  # -0:34 already includes refraction; don't apply it twice
+    # Start the search at local midnight so both events fall on the local date
+    start = (datetime.fromisoformat(date_str).replace(tzinfo=tz)
+             .astimezone(ZoneInfo("UTC")).replace(tzinfo=None))
+    obs.date = start
     sun = ephem.Sun()
     try:
         sr_utc = obs.next_rising(sun).datetime()
-        obs.date = date_str          # reset — next_rising mutates obs.date
+        obs.date = start             # reset — next_rising mutates obs.date
         ss_utc = obs.next_setting(sun).datetime()
         sr = sr_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
         ss = ss_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
@@ -46,13 +58,16 @@ def _compute_solar(lat: float, lon: float, date_str: str, tz: ZoneInfo) -> dict:
             "sunrise_12h": to_12h(sr_str),
             "sunset_12h":  to_12h(ss_str),
             "daylight_hours": round(dl / 60, 2),
+            "v": SOLAR_VERSION,
         }
     except ephem.AlwaysUpError:
         return {"date": date_str, "sunrise": None, "sunset": None,
-                "sunrise_12h": None, "sunset_12h": None, "daylight_hours": 24.0}
+                "sunrise_12h": None, "sunset_12h": None, "daylight_hours": 24.0,
+                "v": SOLAR_VERSION}
     except ephem.NeverUpError:
         return {"date": date_str, "sunrise": None, "sunset": None,
-                "sunrise_12h": None, "sunset_12h": None, "daylight_hours": 0.0}
+                "sunrise_12h": None, "sunset_12h": None, "daylight_hours": 0.0,
+                "v": SOLAR_VERSION}
 
 
 def get_solar_day(lat: float, lon: float, date_str: str) -> dict:
@@ -66,7 +81,9 @@ def get_solar_day(lat: float, lon: float, date_str: str) -> dict:
             (lat_r, lon_r, date_str)
         ).fetchone()
     if row:
-        return json.loads(row[0])
+        cached = json.loads(row[0])
+        if cached.get("v") == SOLAR_VERSION:
+            return cached
 
     tz_name = _tf.timezone_at(lat=lat, lng=lon) or "UTC"
     result = _compute_solar(lat, lon, date_str, ZoneInfo(tz_name))
@@ -95,7 +112,8 @@ def get_solar_range(lat: float, lon: float, begin_str: str, end_str: str) -> lis
             "WHERE lat=? AND lon=? AND date BETWEEN ? AND ? ORDER BY date",
             (lat_r, lon_r, begin_str, end_str)
         ).fetchall()
-    cached = {r[0]: json.loads(r[1]) for r in rows}
+    cached = {r[0]: d for r in rows
+              if (d := json.loads(r[1])).get("v") == SOLAR_VERSION}
 
     # Compute and cache any missing days
     tz_name = _tf.timezone_at(lat=lat, lng=lon) or "UTC"

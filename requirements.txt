@@ -4,6 +4,6 @@ httpx>=0.27
 geopy>=2.4
 timezonefinder>=6.5
 icalendar>=6.1
-mcp>=1.0
+mcp>=1.0,<2  # 2.x removed the Server decorator API used in mcp_server.py
 pydantic>=2.7
 ephem>=4.1

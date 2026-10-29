@@ -164,3 +164,46 @@ def test_check_flood_risk_with_thresholds(tmp_path, monkeypatch):
 
     assert len(results) >= 1
     assert results[0]["flood_level"] == "minor"
+
+
+def test_find_extreme_tides_zero_threshold_respected():
+    # A caller-supplied 0.0 threshold is falsy; it used to be silently replaced
+    # by the computed percentile via `x or default`.
+    data = [{"date": "2026-01-01", "time": "03:00", "height_ft": 0.1, "type": "L"},
+            {"date": "2026-01-01", "time": "09:00", "height_ft": -0.2, "type": "L"}]
+    with patch("app.alert_engine.get_hilo_predictions", return_value=data), \
+         patch("app.alert_engine.compute_extreme_thresholds",
+               return_value={"high_threshold_ft": 9.0, "low_threshold_ft": 0.5}):
+        results = find_extreme_tides("9414290", "20260101", "20260101",
+                                     high_threshold_ft=9.0, low_threshold_ft=0.0)
+    assert [r["height_ft"] for r in results] == [-0.2]
+
+
+def test_compute_extreme_thresholds_by_calendar_year():
+    calls = []
+    def fake(station_id, begin, end, **kw):
+        calls.append((begin, end))
+        return _make_year_data()
+    with patch("app.alert_engine.get_hilo_predictions", side_effect=fake):
+        compute_extreme_thresholds("9414290", year=2027)
+    assert calls == [("20270101", "20271231")]
+
+
+def test_no_flood_data_is_cached():
+    """A station with no NOAA thresholds is remembered, not re-fetched each call."""
+    from app.alert_engine import _get_flood_levels
+    resp = MagicMock()
+    resp.json.return_value = {"nos_minor": None, "nws_minor": None}
+    resp.raise_for_status = MagicMock()
+    with patch("httpx.get", return_value=resp) as get:
+        assert _get_flood_levels("9447427") is None
+        assert _get_flood_levels("9447427") is None
+    assert get.call_count == 1
+
+
+def test_flood_network_failure_not_cached():
+    from app.alert_engine import _get_flood_levels
+    with patch("httpx.get", side_effect=Exception("offline")) as get:
+        assert _get_flood_levels("9447427") is None
+        assert _get_flood_levels("9447427") is None
+    assert get.call_count == 2

@@ -110,3 +110,33 @@ async def test_get_extreme_tides_tool():
     data = json.loads(result[0].text)
     assert "extreme_highs" in data
     assert "extreme_lows" in data
+
+
+@pytest.mark.asyncio
+async def test_find_extreme_in_radius_tool_reports_lowest_lows():
+    """Must answer 'lowest tide within N miles' — it used to return highs only."""
+    from mcp_server import call_tool
+    stations = [
+        {"id": "A", "name": "Alpha", "lat": 0, "lon": 0, "distance_miles": 5.0},
+        {"id": "B", "name": "Bravo", "lat": 0, "lon": 0, "distance_miles": 12.0},
+    ]
+    by_station = {
+        "A": [{"date": "2026-07-01", "time": "06:00", "height_ft": 6.0, "type": "H"},
+              {"date": "2026-07-01", "time": "12:00", "height_ft": -0.4, "type": "L"}],
+        "B": [{"date": "2026-07-02", "time": "07:00", "height_ft": 6.5, "type": "H"},
+              {"date": "2026-07-02", "time": "13:00", "height_ft": -1.3, "type": "L"}],
+    }
+    with patch("app.station_finder.find_stations_in_radius", return_value=stations), \
+         patch("app.tide_data.get_hilo_predictions",
+               side_effect=lambda sid, b, e, **kw: by_station[sid]) as hilo:
+        result = await call_tool("find_extreme_in_radius", {
+            "lat": 37.77, "lon": -122.42, "radius_miles": 50,
+            "begin_date": "2026-07-01", "end_date": "2026-07-31",
+        })
+    data = json.loads(result[0].text)
+    assert data["stations_checked"] == 2
+    assert data["lowest_lows"][0]["station_id"] == "B"
+    assert data["lowest_lows"][0]["height_ft"] == -1.3
+    assert data["highest_highs"][0]["height_ft"] == 6.5
+    # Dashed dates are normalized to the YYYYMMDD form app/ expects
+    assert hilo.call_args.args[1:] == ("20260701", "20260731")
